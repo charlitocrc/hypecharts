@@ -1,0 +1,12 @@
+.os { padding-bottom: 100px; }
+.os-in { display: grid; grid-template-columns: 1.3fr 1fr; gap: clamp(24px, 5vw, 80px); align-items: center; }
+.os h2 { font-size: clamp(36px, 4.6vw, 66px); line-height: 1.05; }
+.os-copy p { font-size: clamp(19px, 2vw, 28px); font-weight: 400; margin: 22px 0 34px; }
+.os-art { aspect-ratio: 1 / 1; width: 100%; max-width: 440px; justify-self: end; }
+.os-art svg { display: block; width: 100%; height: 100%; }
+
+@media (max-width: 760px) {
+  .os { padding-bottom: 64px; }
+  .os-in { grid-template-columns: 1fr; }
+  .os-art { justify-self: stretch; max-width: none; aspect-ratio: 16 / 10; order: -1; }
+}

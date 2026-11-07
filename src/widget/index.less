@@ -1,0 +1,49 @@
+@import './period-bar/index.less';
+@import './drawing-bar/index.less';
+@import './indicator-modal/index.less';
+@import './setting-modal/index.less';
+@import './indicator-setting-modal/index.less';
+@import './text-editor-modal/index.less';
+@import './drawing-manager/index.less';
+@import './symbol-search-modal/index.less';
+
+
+// IND-005: template rename; DRAW-006: toolbar favorites
+.klinecharts-pro-indicator-modal {
+  .template-rename {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    color: var(--klinecharts-pro-text-second-color);
+    background: none;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+
+    svg {
+      width: 15px;
+      height: 15px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.7;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    &:hover { color: var(--klinecharts-pro-primary-color, #2962ff); }
+  }
+
+  .template-rename-input {
+    height: 26px;
+    padding: 0 8px;
+    box-sizing: border-box;
+    color: var(--klinecharts-pro-text-color);
+    background: transparent;
+    border: 1px solid var(--klinecharts-pro-primary-color, #2962ff);
+    border-radius: 5px;
+    font-size: 12px;
+    min-width: 120px;
+  }
+}

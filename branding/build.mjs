@@ -1,0 +1,1 @@
+import{build}from'esbuild';const file=Object.fromEntries(['.png','.jpg','.webp','.avif','.gif','.svg','.mp4','.webm','.mov','.glb','.bin'].map(e=>[e,'file']));await build({entryPoints:['entry.tsx'],outdir:'dist',bundle:true,jsx:'automatic',platform:'browser',format:'iife',loader:file,define:{'process.env.NODE_ENV':'"production"'}});

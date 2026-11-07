@@ -1,0 +1,19 @@
+.strip-sec { padding-bottom: 90px; }
+.strip {
+  --c: 28px;
+  position: relative; display: grid; grid-template-columns: 1fr 1fr; align-items: center;
+  background: var(--light); color: var(--base);
+  min-height: clamp(150px, 15vw, 210px);
+}
+.strip p { font-weight: 700; font-size: clamp(40px, 5.6vw, 82px); line-height: 1; padding: 0 clamp(24px, 4vw, 64px); }
+.strip-a { justify-self: start; }
+.strip-b { justify-self: end; text-align: right; }
+.strip-zig { position: absolute; top: 0; bottom: 0; left: 40%; width: 12%; height: 100%; }
+
+@media (max-width: 640px) {
+  .strip-sec { padding-bottom: 60px; }
+  .strip { grid-template-columns: 1fr; min-height: 0; }
+  .strip p { padding: 34px 28px; font-size: 44px; }
+  .strip-b { justify-self: start; text-align: left; border-top: 6px solid var(--base); }
+  .strip-zig { display: none; }
+}

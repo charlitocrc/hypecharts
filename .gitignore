@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build output (regenerate with npm run build / build:demo)
+dist/
+dist-demo/
+docs/site/.vitepress/dist/
+docs/site/.vitepress/cache/
+
+# Cloudflare / Wrangler
+.wrangler/
+.dev.vars*
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Test / coverage / tooling caches
+coverage/
+.vitest/
+*.tsbuildinfo
+.eslintcache
+.cache/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+Thumbs.db
+
+# Local-only dev tooling
+scripts/parity-report.mjs
+AGENTS.md
+docs/
+feature-parity.*
+

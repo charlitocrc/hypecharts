@@ -1,0 +1,208 @@
+@import (reference) '../../base.less';
+
+.@{prefix-cls}-drawing-bar {
+  display: flex;
+  flex-direction: column;
+  width: @drawing-bar-width;
+  height: 100%;
+  box-sizing: border-box;
+  border-right: solid 1px var(--klinecharts-pro-border-color);
+  .item {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    width: 100%;
+    height: 40px;
+    flex: 0 1 40px;
+    min-height: 28px;
+    cursor: pointer;
+    color: var(--klinecharts-pro-text-second-color);
+    fill: var(--klinecharts-pro-text-second-color);
+    stroke: var(--klinecharts-pro-text-second-color);
+    .tool-button {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      box-sizing: border-box;
+      outline: none;
+      transition: background-color .2s, color .2s;
+      &:hover,
+      &:focus-visible {
+        background-color: var(--klinecharts-pro-hover-background-color);
+      }
+      &::after {
+        content: attr(data-tooltip);
+        position: absolute;
+        top: 50%;
+        left: calc(100% + 8px);
+        z-index: 120;
+        transform: translateY(-50%);
+        visibility: hidden;
+        opacity: 0;
+        pointer-events: none;
+        white-space: nowrap;
+        padding: 6px 9px;
+        border: solid 1px var(--klinecharts-pro-border-color);
+        border-radius: 5px;
+        color: var(--klinecharts-pro-tooltip-text-color);
+        background: var(--klinecharts-pro-tooltip-background-color);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, .28);
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        transition: opacity .12s ease .25s, visibility 0s linear .37s;
+      }
+    }
+    &:not(.popover-open):hover > .tool-button::after,
+    &:not(.popover-open) > .tool-button:focus-visible::after {
+      visibility: visible;
+      opacity: 1;
+      transition-delay: .25s;
+    }
+    .icon-overlay {
+      width: 32px;
+      height: 32px;
+      max-height: 100%;
+      border-radius: 2px;
+      transition: all 0.2s;
+      &.selected {
+        background-color: var(--klinecharts-pro-selected-color)!important;
+        fill: var(--klinecharts-pro-primary-color);
+        stroke: var(--klinecharts-pro-primary-color);
+      }
+    }
+    .tool-button.is-active {
+      background-color: var(--klinecharts-pro-selected-color)!important;
+      .icon-overlay {
+        background-color: transparent!important;
+      }
+    }
+    .is-active .icon-overlay {
+      fill: var(--klinecharts-pro-primary-color);
+      stroke: var(--klinecharts-pro-primary-color);
+      color: var(--klinecharts-pro-primary-color);
+    }
+    .icon-arrow {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      justify-content: center;
+      position: absolute;
+      top: 0;
+      right: 0;
+      height: 100%;
+      width: 12px;
+      opacity: 0;
+      transition: all .2s;
+      border-top-left-radius: 2px;
+      border-bottom-left-radius: 2px;
+      z-index: 10;
+      svg {
+        width: 4px;
+        height: 6px;
+        transition: all .2s;
+        &.rotate {
+          transform: rotate(180deg);
+        }
+      }
+      &:hover {
+        background-color: var(--klinecharts-pro-hover-background-color);
+      }
+    }
+
+    .list {
+      position: absolute;
+      top: 0;
+      white-space: nowrap;
+      left: calc(100% + 1px);
+      background-color: var(--klinecharts-pro-popover-background-color);
+      z-index: 99;
+      box-shadow: 0 6px 12px 0 rgba(0, 0, 0, .3);
+      min-height: auto;
+      max-height: 320px;
+      li {
+        width: 100%;
+        padding-left: 16px;
+        .icon-overlay {
+          &:hover {
+            background-color: transparent;
+          }
+        }
+        &.is-selected {
+          color: var(--klinecharts-pro-primary-color);
+          background-color: var(--klinecharts-pro-selected-color);
+          fill: var(--klinecharts-pro-primary-color);
+          stroke: var(--klinecharts-pro-primary-color);
+        }
+      }
+    }
+
+    .cursor-list {
+      min-width: 170px;
+    }
+    
+    &:hover {
+      .icon-arrow {
+        opacity: 1;
+      }
+    }
+  }
+
+  .split-line {
+    display: block;
+    flex: none;
+    width: 100%;
+    height: 1px;
+    background-color: var(--klinecharts-pro-border-color);
+  }
+}
+
+
+// DRAW-006: favorites group + per-row star
+.klinecharts-pro-drawing-bar {
+  .favorites-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .list li {
+    display: flex;
+    align-items: center;
+
+    .row-star {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      margin-left: auto;
+      color: var(--klinecharts-pro-text-second-color);
+      background: none;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+
+      svg {
+        width: 14px;
+        height: 14px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.6;
+        stroke-linejoin: round;
+      }
+
+      &:hover { color: #ff9800; }
+
+      &[aria-pressed='true'] {
+        color: #ff9800;
+
+        svg { fill: #ff9800; stroke: #ff9800; }
+      }
+    }
+  }
+}

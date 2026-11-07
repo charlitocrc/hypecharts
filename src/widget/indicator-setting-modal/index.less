@@ -1,0 +1,467 @@
+@import (reference) '../../base.less';
+
+.@{prefix-cls}-indicator-setting-modal {
+  .inner {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .title-container {
+    flex-shrink: 0;
+  }
+
+  .content-container {
+    min-height: 0;
+    display: flex;
+    flex: 1 1 auto;
+    padding: 0;
+    overflow: hidden;
+  }
+}
+
+.@{prefix-cls}-indicator-setting-modal-form {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  max-height: calc(100vh - 76px);
+  color: var(--klinecharts-pro-text-color);
+
+  button,
+  input {
+    font: inherit;
+  }
+
+  button {
+    outline: none;
+  }
+}
+
+.@{prefix-cls}-indicator-setting-summary {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 24px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--klinecharts-pro-border-color);
+  border-radius: 8px;
+  background: var(--klinecharts-pro-background-color);
+  flex-shrink: 0;
+
+  .move-pane-select {
+    justify-self: end;
+    height: 30px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--klinecharts-pro-text-color);
+    background: var(--klinecharts-pro-popover-background-color);
+    border: 1px solid var(--klinecharts-pro-border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    &:hover { border-color: var(--klinecharts-pro-primary-color); }
+  }
+  .indicator-code {
+    padding: 5px 8px;
+    border-radius: 5px;
+    color: #fff;
+    background: var(--klinecharts-pro-primary-color);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+
+  .indicator-name {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--klinecharts-pro-text-color);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .indicator-placement {
+    color: var(--klinecharts-pro-text-second-color);
+    font-size: 12px;
+  }
+}
+
+.@{prefix-cls}-indicator-setting-intro {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 18px 24px 10px;
+  flex-shrink: 0;
+
+  strong {
+    font-size: 14px;
+  }
+
+  span {
+    color: var(--klinecharts-pro-text-second-color);
+    font-size: 12px;
+  }
+}
+
+.@{prefix-cls}-indicator-setting-body {
+  min-height: 0;
+  flex: 0 1 auto;
+  max-height: min(480px, calc(100vh - 240px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.@{prefix-cls}-indicator-setting-plots {
+  padding: 0 24px 12px;
+
+  .plot-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 36px 72px 86px;
+    align-items: center;
+    gap: 8px;
+    min-height: 42px;
+    border-bottom: 1px solid var(--klinecharts-pro-border-color);
+
+    &:last-child {
+      border-bottom: 0;
+    }
+
+    &.muted .plot-visible span {
+      color: var(--klinecharts-pro-text-second-color);
+      text-decoration: line-through;
+    }
+  }
+
+  .plot-visible {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    font-size: 13px;
+    cursor: pointer;
+
+    span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  input[type="color"] {
+    width: 36px;
+    height: 28px;
+    padding: 2px;
+    border: 1px solid var(--klinecharts-pro-border-color);
+    border-radius: 4px;
+    background: var(--klinecharts-pro-popover-background-color);
+    cursor: pointer;
+  }
+
+  select {
+    height: 28px;
+    min-width: 0;
+    border: 1px solid var(--klinecharts-pro-border-color);
+    border-radius: 4px;
+    color: var(--klinecharts-pro-text-color);
+    background: var(--klinecharts-pro-popover-background-color);
+    font: inherit;
+    font-size: 12px;
+  }
+}
+
+.@{prefix-cls}-indicator-setting-fields {
+  padding: 0 24px 6px;
+
+  .parameter-row {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) 190px;
+    align-items: center;
+    gap: 20px;
+    min-height: 70px;
+    border-bottom: 1px solid var(--klinecharts-pro-border-color);
+
+    &:last-child {
+      border-bottom: 0;
+    }
+  }
+
+  .parameter-copy {
+    min-width: 0;
+
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+  }
+
+  .parameter-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    color: var(--klinecharts-pro-text-second-color);
+    font-size: 11px;
+
+    .optional {
+      color: var(--klinecharts-pro-primary-color);
+    }
+  }
+
+  .parameter-control {
+    position: relative;
+    display: grid;
+    grid-template-columns: 36px 1fr 36px;
+    height: 38px;
+    border: 1px solid var(--klinecharts-pro-border-color);
+    border-radius: 5px;
+    background: var(--klinecharts-pro-popover-background-color);
+    transition: border-color .15s ease, box-shadow .15s ease;
+
+    &:focus-within {
+      border-color: var(--klinecharts-pro-primary-color);
+      box-shadow: 0 0 0 2px rgba(33, 150, 243, .12);
+    }
+
+    input, select {
+      min-width: 0;
+      border: 0;
+      outline: none;
+      color: var(--klinecharts-pro-text-color);
+      background: transparent;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+
+    &.select {
+      grid-template-columns: 1fr;
+    }
+
+    option {
+      background: var(--klinecharts-pro-popover-background-color);
+    }
+
+    .step-button {
+      border: 0;
+      color: var(--klinecharts-pro-text-second-color);
+      background: transparent;
+      font-size: 18px;
+      cursor: pointer;
+
+      &:first-child {
+        border-right: 1px solid var(--klinecharts-pro-border-color);
+      }
+
+      &:not(:first-child) {
+        border-left: 1px solid var(--klinecharts-pro-border-color);
+      }
+
+      &:hover {
+        color: var(--klinecharts-pro-primary-color);
+        background: var(--klinecharts-pro-background-color);
+      }
+    }
+
+    .parameter-error {
+      position: absolute;
+      top: 40px;
+      right: 0;
+      color: #ef5350;
+      font-size: 11px;
+      line-height: 14px;
+      text-align: right;
+    }
+  }
+
+  .parameter-row.invalid {
+    min-height: 84px;
+
+    .parameter-control {
+      border-color: #ef5350;
+    }
+  }
+}
+
+.@{prefix-cls}-indicator-setting-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 160px;
+  color: var(--klinecharts-pro-text-second-color);
+  font-size: 13px;
+  text-align: center;
+
+  .empty-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--klinecharts-pro-border-color);
+    border-radius: 50%;
+    color: var(--klinecharts-pro-primary-color);
+    font-size: 18px;
+  }
+}
+
+.@{prefix-cls}-indicator-setting-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--klinecharts-pro-border-color);
+  flex-shrink: 0;
+
+  button {
+    height: 36px;
+    padding: 0 16px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+    opacity: .45;
+  }
+
+  .reset-button,
+  .cancel-button {
+    border: 1px solid var(--klinecharts-pro-border-color);
+    color: var(--klinecharts-pro-text-color);
+    background: transparent;
+
+    &:not(:disabled):hover {
+      border-color: var(--klinecharts-pro-primary-color);
+      color: var(--klinecharts-pro-primary-color);
+    }
+  }
+
+  .reset-button {
+    padding: 0;
+    border-color: transparent;
+    color: var(--klinecharts-pro-primary-color);
+  }
+
+  .primary-actions {
+    display: flex;
+    gap: 10px;
+  }
+
+  .apply-button {
+    min-width: 86px;
+    border: 1px solid var(--klinecharts-pro-primary-color);
+    color: #fff;
+    background: var(--klinecharts-pro-primary-color);
+  }
+}
+
+@media (max-width: 600px) {
+  .@{prefix-cls}-indicator-setting-summary {
+    grid-template-columns: auto 1fr;
+    margin: 14px 16px 0;
+
+    .indicator-placement {
+      display: none;
+    }
+  }
+
+  .@{prefix-cls}-indicator-setting-intro {
+    padding: 16px 16px 8px;
+  }
+
+  .@{prefix-cls}-indicator-setting-body {
+    max-height: calc(100vh - 240px);
+  }
+
+  .@{prefix-cls}-indicator-setting-plots {
+    padding: 0 16px 12px;
+
+    .plot-row {
+      grid-template-columns: minmax(0, 1fr) 36px 64px 78px;
+      gap: 6px;
+    }
+  }
+
+  .@{prefix-cls}-indicator-setting-fields {
+    padding: 0 16px 6px;
+
+    .parameter-row {
+      grid-template-columns: 1fr 148px;
+      gap: 12px;
+    }
+  }
+
+  .@{prefix-cls}-indicator-setting-actions {
+    padding: 14px 16px 16px;
+  }
+}
+
+
+// IND-003: direction-colored bar swatches + per-plot opacity, IND-005 template save
+.klinecharts-pro-indicator-setting-plots .plot-row {
+  display: flex;
+  flex-wrap: wrap;
+
+  input[type='color'] {
+    width: 34px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--klinecharts-pro-border-color);
+    border-radius: 4px;
+    background: none;
+    cursor: pointer;
+  }
+
+  .plot-opacity {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 150px;
+    font-size: 12px;
+    color: var(--klinecharts-pro-text-second-color);
+
+    input[type='range'] {
+      width: 84px;
+      accent-color: var(--klinecharts-pro-primary-color, #2962ff);
+    }
+  }
+}
+
+.klinecharts-pro-indicator-setting-template {
+  display: flex;
+  gap: 8px;
+  padding: 12px 24px 16px;
+  border-top: 1px solid var(--klinecharts-pro-border-color);
+
+  input[type='text'] {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 32px;
+    padding: 0 10px;
+    box-sizing: border-box;
+    color: var(--klinecharts-pro-text-color);
+    background: transparent;
+    border: 1px solid var(--klinecharts-pro-border-color);
+    border-radius: 6px;
+    font-size: 13px;
+  }
+
+  .template-save-button {
+    height: 32px;
+    padding: 0 14px;
+    color: var(--klinecharts-pro-text-color);
+    background: var(--klinecharts-pro-hover-background-color);
+    border: 1px solid var(--klinecharts-pro-border-color);
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+
+    &:disabled { opacity: 0.5; cursor: default; }
+    &:not(:disabled):hover { border-color: var(--klinecharts-pro-primary-color, #2962ff); }
+  }
+}

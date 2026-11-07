@@ -1,0 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&display=swap');
+
+:root {
+  --base: #252627;
+  --light: #f2efe9;
+  --khaki: #bfb48f;
+  --plum: #564e58;
+  --brick: #904e55;
+  --pad: clamp(20px, 4.2vw, 60px);
+}
+
+* { box-sizing: border-box; margin: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--base);
+  color: var(--light);
+  font-family: 'Chakra Petch', 'Arial Narrow', Arial, sans-serif;
+  font-weight: 500;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { font-weight: 700; line-height: 1; letter-spacing: -0.01em; }
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; cursor: pointer; border: 0; }
+:focus-visible { outline: 3px solid var(--khaki); outline-offset: 3px; }
+
+.wrap { max-width: 1320px; margin: 0 auto; padding: 0 var(--pad); }
+section { scroll-margin-top: 90px; }
+
+/* chamfers */
+.cut {
+  --c: 24px;
+  clip-path: polygon(var(--c) 0, calc(100% - var(--c)) 0, 100% var(--c), 100% calc(100% - var(--c)), calc(100% - var(--c)) 100%, var(--c) 100%, 0 calc(100% - var(--c)), 0 var(--c));
+}
+.cut-diag {
+  --c: 24px;
+  clip-path: polygon(0 0, calc(100% - var(--c)) 0, 100% var(--c), 100% 100%, var(--c) 100%, 0 calc(100% - var(--c)));
+}
+
+/* buttons */
+.btn {
+  --c: 12px;
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 16px 28px;
+  font-size: 17px; font-weight: 700;
+  clip-path: polygon(0 0, calc(100% - var(--c)) 0, 100% var(--c), 100% 100%, var(--c) 100%, 0 calc(100% - var(--c)));
+  transition: background-color .15s, color .15s;
+}
+.btn-khaki { background: var(--khaki); color: var(--base); }
+.btn-khaki:hover { background: var(--light); }
+.btn-plum { background: var(--plum); color: var(--light); }
+.btn-plum:hover { background: var(--brick); }
+.btn-dark { background: var(--base); color: var(--light); }
+.btn-dark:hover { background: var(--plum); }

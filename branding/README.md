@@ -1,0 +1,1 @@
+Frontend prototype. Run pnpm install --frozen-lockfile, then pnpm build. Serve this directory using a static web server. Data and navigation state are local and reset on reload. No API or database is included.

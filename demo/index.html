@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HypeCharts — open-source crypto charting</title>
+  <meta name="description" content="Open-source (Apache-2.0) crypto charting library. 80 indicators, 59 drawing tools, live Hyperliquid and Binance datafeeds." />
+  <link rel="icon" type="image/svg+xml" href="/symbol.svg" />
+</head>
+<body>
+  <header class="hdr">
+    <div class="wrap hdr-in">
+      <a href="#top" class="brand" role="img" aria-label="HypeCharts">
+        <span class="brand-symbol"></span>
+        <span class="brand-wordmark"></span>
+      </a>
+      <nav class="hdr-nav" aria-label="Primary">
+        <a href="#chart-section">Live demo</a>
+        <a href="#features">Features</a>
+        <a href="#quickstart">Quickstart</a>
+      </nav>
+      <div class="hdr-right">
+        <span class="license-pill">Apache-2.0</span>
+        <a class="btn btn-khaki hdr-cta" href="#quickstart">Get started</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="wrap hero-in">
+        <div class="hero-copy">
+          <p class="hero-eyebrow">Open source<br />charting software</p>
+          <h1>An open-source charting library for cryptocurrency markets.</h1>
+          <p class="hero-sub">
+            80 indicators, 59 drawing tools, undo/redo, chart types from Heikin Ashi to
+            Renko, and Hyperliquid + Binance datafeeds built in.
+          </p>
+          <div class="hero-btns">
+            <a class="btn btn-khaki" href="#chart-section">Try the live chart</a>
+            <a class="btn btn-plum" href="#quickstart"><span class="icon" data-icon="/icon-code.svg"></span>Run it locally</a>
+          </div>
+        </div>
+        <div class="hero-art cut-diag">
+          <svg viewBox="0 0 400 480" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Rising line chart with candlesticks">
+            <rect width="400" height="480" fill="#564e58" />
+            <polyline points="-20,262 70,178 118,222 215,118 250,152 345,52 420,-24" fill="none" stroke="#f2efe9" stroke-width="24" stroke-linejoin="miter" stroke-miterlimit="10" />
+            <g class="candle" tabIndex="0">
+              <rect x="40" y="320" width="44" height="130" fill="transparent" />
+              <rect class="wick" x="60" y="330" width="4" height="110" fill="#bfb48f" />
+              <rect class="body" x="50" y="350" width="24" height="70" fill="#bfb48f" />
+            </g>
+            <g class="candle" tabIndex="0">
+              <rect x="104" y="252" width="44" height="150" fill="transparent" />
+              <rect class="wick" x="124" y="262" width="4" height="138" fill="#904e55" />
+              <rect class="body" x="114" y="290" width="24" height="110" fill="#904e55" />
+            </g>
+            <g class="candle" tabIndex="0">
+              <rect x="168" y="222" width="44" height="132" fill="transparent" />
+              <rect class="wick" x="188" y="250" width="4" height="100" fill="#bfb48f" />
+              <rect class="body" x="178" y="270" width="24" height="80" fill="#bfb48f" />
+            </g>
+            <g class="candle" tabIndex="0">
+              <rect x="232" y="172" width="44" height="162" fill="transparent" />
+              <rect class="wick" x="252" y="195" width="4" height="135" fill="#904e55" />
+              <rect class="body" x="242" y="220" width="24" height="110" fill="#904e55" />
+            </g>
+            <g class="candle" tabIndex="0">
+              <rect x="296" y="102" width="44" height="178" fill="transparent" />
+              <rect class="wick" x="316" y="125" width="4" height="150" fill="#bfb48f" />
+              <rect class="body" x="306" y="150" width="24" height="125" fill="#bfb48f" />
+            </g>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats" aria-label="Library at a glance">
+      <div class="wrap stats-in">
+        <article class="stat stat-plum cut-diag"><p class="stat-num">80</p><h3 class="stat-label">Indicators</h3></article>
+        <article class="stat stat-brick cut-diag"><p class="stat-num">59</p><h3 class="stat-label">Drawing tools</h3></article>
+        <article class="stat stat-plum cut-diag"><p class="stat-num">13</p><h3 class="stat-label">Chart styles</h3></article>
+        <article class="stat stat-brick cut-diag"><p class="stat-num">2</p><h3 class="stat-label">Live venues</h3></article>
+      </div>
+    </section>
+
+    <section id="chart-section" class="chart-section">
+      <div class="wrap">
+        <div class="chart-frame">
+          <div class="chart-toolbar">
+            <div class="toolbar-group" id="symbol-buttons" aria-label="Symbol"></div>
+            <div class="toolbar-group" id="exchange-buttons" aria-label="Exchange"></div>
+            <div class="toolbar-spacer"></div>
+            <span class="feed-chip" id="feed-status">connecting…</span>
+            <button class="toolbar-btn" id="layout-toggle" type="button" title="Two synced charts, one per venue">◱ Split</button>
+            <button class="toolbar-btn" id="theme-toggle" type="button">☀ Light</button>
+          </div>
+          <div id="chart"></div>
+          <p class="chart-note">
+            Live Hyperliquid + Binance through one composite datafeed · press <kbd>/</kbd> (or Ctrl/⌘K)
+            to search any symbol across venues · drawings and indicator layouts persist locally per symbol ·
+            every control inside the frame is the real library, not a mock.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="strip-sec" aria-label="Free and open source">
+      <div class="wrap">
+        <div class="strip cut-diag">
+          <p class="strip-a">Free</p>
+          <svg class="strip-zig" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <polyline points="72,-2 28,50 52,102" fill="none" stroke="currentColor" stroke-width="12" vector-effect="non-scaling-stroke" stroke-linejoin="miter" />
+          </svg>
+          <p class="strip-b">Open source</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="wrap">
+        <h2>What ships today</h2>
+        <div class="feature-grid">
+          <div class="card cut"><h3>80 indicators</h3><p>From MA and Bollinger to Ichimoku, Supertrend and volume profiles — with editable params, per-plot styling and multiple instances of the same study.</p></div>
+          <div class="card cut"><h3>59 drawing tools</h3><p>Trend lines to pitchforks, Fibonacci/Gann, wave patterns, position and measurement tools, freehand brushes — with magnets and continuous mode.</p></div>
+          <div class="card cut"><h3>Undo / redo</h3><p>A unified named history across drawings, indicator layout and chart type. Ctrl/⌘Z everywhere.</p></div>
+          <div class="card cut"><h3>13 chart styles</h3><p>Candles in four treatments, OHLC bars, area, line, step line, baseline and HLC area — plus Heikin Ashi, Renko and Line Break transformations.</p></div>
+          <div class="card cut"><h3>Real-time datafeed API</h3><p>One small interface — history paging plus WebSocket subscribe — is all an exchange integration needs. Hyperliquid and Binance ship in-tree.</p></div>
+          <div class="card cut"><h3>Persisted workspaces</h3><p>Per-symbol drawings, indicator instances, params and pane heights survive reloads, along with zoom state.</p></div>
+          <div class="card cut"><h3>i18n &amp; time zones</h3><p>English and 简体中文, 18 time zones, light/dark themes, full-screen and screenshot export.</p></div>
+          <div class="card cut"><h3>Trading overlays</h3><p>Position entry, PnL, liquidation and open-order lines with click-to-cancel and drag-to-modify.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="quickstart" class="section qs">
+      <div class="wrap qs-in">
+        <div class="qs-copy">
+          <h2>Run it locally</h2>
+          <p class="section-sub">
+            The demo imports the library straight from <code>src/</code>, so every edit you make
+            hot-reloads on the page. Run the test suite with <code>npm test</code> and the production
+            build with <code>npm run build</code>.
+          </p>
+          <a class="btn btn-khaki" href="https://github.com/charlitocrc/hypecharts" target="_blank" rel="noreferrer"><span class="icon" data-icon="/icon-code.svg"></span>View source</a>
+        </div>
+        <div class="qs-code cut-diag">
+          <pre><code>git clone &lt;this-repo&gt; hypecharts
+cd hypecharts
+npm install
+npm run demo        # → http://localhost:5180</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta-sec">
+      <div class="wrap">
+        <div class="cta cut">
+          <h2>Start charting.</h2>
+          <a class="btn btn-dark" href="#chart-section">Try the live chart</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="ftr">
+    <div class="wrap ftr-in">
+      <p class="ftr-brand">HypeCharts</p>
+      <nav aria-label="Footer">
+        <a href="#features">Features</a>
+        <a href="#quickstart">Quickstart</a>
+      </nav>
+      <p class="ftr-end">HypeCharts.</p>
+    </div>
+    <div class="wrap ftr-legal">
+      <p>
+        HypeCharts — Apache-2.0. Market data in this demo is public and delayed
+        where the venue delays it. Nothing here is financial advice.
+      </p>
+    </div>
+  </footer>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

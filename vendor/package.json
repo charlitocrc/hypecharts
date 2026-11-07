@@ -1,0 +1,8 @@
+{
+  "name": "klinecharts",
+  "version": "9.1.1",
+  "description": "Vendored KLineChart core with local patches (per-plot styles, user drawing styles). Installed via the 'klinecharts' file: override so dev, tests and builds all run the patched core.",
+  "main": "klinecharts.js",
+  "license": "Apache-2.0",
+  "types": "types/index.d.ts"
+}

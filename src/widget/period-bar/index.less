@@ -1,0 +1,272 @@
+@import (reference) '../../base.less';
+
+.@{prefix-cls}-period-bar {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  align-items: stretch;
+  min-height: @period-bar-height;
+  width: 100%;
+  box-sizing: border-box;
+  border-bottom: solid 1px var(--klinecharts-pro-border-color);
+  // Navbar items fill their blocks edge to edge (hover included), matching
+  // the drawing sidebar's full-height tool blocks.
+  .item {
+    transition: background-color 0.2s, color 0.2s, fill 0.2s;
+    box-sizing: border-box;
+    cursor: pointer;
+    fill: var(--klinecharts-pro-text-color);
+    &.selected {
+      background-color: var(--klinecharts-pro-selected-color)!important;
+      color: var(--klinecharts-pro-primary-color);
+    }
+  }
+  .item.symbol {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 220px;
+    padding: 0 10px;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    &:hover {
+      background-color: var(--klinecharts-pro-hover-background-color);
+    }
+    svg {
+      width: 14px;
+      height: 14px;
+      flex: none;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+    }
+    .symbol-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
+  .item.compare {
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    white-space: nowrap;
+    &:hover {
+      background-color: var(--klinecharts-pro-hover-background-color);
+    }
+    svg {
+      width: 14px;
+      height: 14px;
+      flex: none;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.6;
+      stroke-linecap: round;
+    }
+  }
+  .split-line {
+    width: 1px;
+    height: 16px;
+    margin: 0 4px;
+    flex: none;
+    align-self: center;
+    background-color: var(--klinecharts-pro-border-color);
+  }
+  .period {
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    font-size: 14px;
+    white-space: nowrap;
+    &:hover {
+      background-color: var(--klinecharts-pro-hover-background-color);
+    }
+    &.selected {
+      color: var(--klinecharts-pro-primary-color);
+      background-color: var(--klinecharts-pro-selected-color);
+    }
+  }
+  .period-more-wrapper {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    height: auto;
+    .period-more {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 8px;
+      &:hover {
+        background-color: var(--klinecharts-pro-hover-background-color);
+      }
+      svg {
+        width: 10px;
+        height: 7px;
+        stroke: currentColor;
+        fill: none;
+        transition: transform .2s;
+      }
+      &.active {
+        color: var(--klinecharts-pro-primary-color);
+        svg {
+          transform: rotate(180deg);
+        }
+      }
+    }
+    .period-menu {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      z-index: 30;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin-top: 6px;
+      padding: 10px;
+      box-sizing: border-box;
+      border: solid 1px var(--klinecharts-pro-border-color);
+      border-radius: 6px;
+      background-color: var(--klinecharts-pro-popover-background-color);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, .28);
+      .period-menu-item {
+        min-width: 52px;
+        padding: 7px 12px;
+        font-size: 14px;
+        text-align: center;
+        border-radius: 4px;
+        cursor: pointer;
+        white-space: nowrap;
+        background-color: var(--klinecharts-pro-hover-background-color);
+        &:hover {
+          color: var(--klinecharts-pro-primary-color);
+        }
+        &.selected {
+          color: var(--klinecharts-pro-primary-color);
+          background-color: var(--klinecharts-pro-selected-color);
+        }
+      }
+      .period-menu-builder {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--klinecharts-pro-text-second-color);
+        text-align: left;
+        background-color: transparent;
+        border-top: 1px solid var(--klinecharts-pro-border-color);
+        border-radius: 0;
+      }
+    }
+  }
+  .tools {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    padding: 0 12px;
+    border-right: solid 1px var(--klinecharts-pro-border-color);
+    &:hover {
+      fill: var(--klinecharts-pro-primary-color);
+      color: var(--klinecharts-pro-primary-color);
+      background-color: var(--klinecharts-pro-hover-background-color);
+    }
+    svg {
+      width: 16px;
+      height: 16px;
+    }
+    span {
+      margin-left: 4px;
+    }
+  }
+  .candle-type-wrapper {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    height: auto;
+    .candle-type {
+      width: 42px;
+      height: 100%;
+      padding: 0;
+      &.active {
+        color: var(--klinecharts-pro-primary-color);
+        fill: var(--klinecharts-pro-primary-color);
+        background-color: var(--klinecharts-pro-selected-color);
+      }
+    }
+    .candle-type-menu {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      z-index: 31;
+      min-width: 190px;
+      margin-top: 6px;
+      padding: 5px;
+      box-sizing: border-box;
+      border: solid 1px var(--klinecharts-pro-border-color);
+      border-radius: 6px;
+      color: var(--klinecharts-pro-text-color);
+      background-color: var(--klinecharts-pro-popover-background-color);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, .28);
+      .candle-type-menu-item {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        height: 34px;
+        padding: 0 10px;
+        box-sizing: border-box;
+        border-radius: 4px;
+        cursor: pointer;
+        white-space: nowrap;
+        &:hover {
+          background-color: var(--klinecharts-pro-hover-background-color);
+        }
+        &.selected {
+          color: var(--klinecharts-pro-primary-color);
+          background-color: var(--klinecharts-pro-selected-color);
+        }
+        .selection-mark {
+          width: 16px;
+          margin-right: 4px;
+          font-weight: 600;
+        }
+        .candle-type-icon {
+          flex: 0 0 auto;
+          width: 20px;
+          height: 20px;
+          margin-right: 8px;
+        }
+      }
+    }
+  }
+  .period-more-wrapper + .tools {
+    border-left: solid 1px var(--klinecharts-pro-border-color);
+    margin-left: 8px;
+  }
+  // Undo/redo/layers sit in the navbar: drop the panel-button look for
+  // full-height navbar blocks with the same hover fill.
+  .klinecharts-pro-drawing-actions {
+    display: flex;
+    align-items: stretch;
+    margin-left: auto;
+    padding: 0;
+    height: auto;
+    button {
+      display: flex;
+      align-items: center;
+      height: auto;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      font-size: 14px;
+      svg {
+        width: 14px;
+        height: 14px;
+        display: block;
+      }
+    }
+    button:hover:not(:disabled) {
+      background-color: var(--klinecharts-pro-hover-background-color);
+    }
+  }
+}

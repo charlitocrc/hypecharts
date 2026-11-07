@@ -1,0 +1,27 @@
+.hdr { position: sticky; top: 0; z-index: 20; background: var(--base); }
+.hdr-in { display: flex; align-items: center; gap: 40px; height: 100px; }
+.logo {
+  display: block; flex: none;
+  width: 180px; height: 46px;
+  background-color: var(--light);
+  -webkit-mask: url("../assets/logo.svg") left center / contain no-repeat;
+  mask: url("../assets/logo.svg") left center / contain no-repeat;
+}
+.hdr-nav { display: flex; gap: 36px; margin-right: auto; margin-left: 12px; }
+.hdr-nav a { font-size: 16px; padding: 8px 0; border-bottom: 3px solid transparent; transition: border-color .15s, color .15s; }
+.hdr-nav a:hover { border-color: var(--khaki); color: var(--khaki); }
+.hdr-burger { display: none; background: none; color: var(--light); padding: 8px; }
+.hdr-panel { display: none; }
+
+@media (max-width: 760px) {
+  .hdr-in { height: 76px; gap: 16px; }
+  .logo { width: 150px; height: 38px; margin-right: auto; }
+  .hdr-nav, .hdr-cta { display: none; }
+  .hdr-burger { display: block; }
+  .hdr-panel {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+    padding: 8px var(--pad) 28px; background: var(--base);
+  }
+  .hdr-panel a { font-size: 22px; font-weight: 600; padding: 12px 0; }
+  .hdr-panel .btn { margin-top: 12px; }
+}
