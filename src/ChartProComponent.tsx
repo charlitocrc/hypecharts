@@ -70,7 +70,7 @@ import { alignSeries, fillLeadingGaps, nextCompareColor, normalizeCompareValues 
 
 import { translateTimezone } from './widget/timezone-modal/data'
 
-import { parsePeriodText } from './aggregate'
+import { bucketEnd, parsePeriodText } from './aggregate'
 import type { AggregatingDatafeed } from './datafeeds/aggregate'
 
 import i18n from './i18n'
@@ -173,7 +173,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     }
   }
 
-  let candleDateTimeFormat = buildDateTimeFormat(props.timezone)
+  // The timezone effect runs before the first tooltip. Avoid constructing a
+  // formatter here that it would immediately replace (saved zones may differ).
+  let candleDateTimeFormat: Intl.DateTimeFormat | undefined
 
   const candleTooltipLegends = (data: { current: KLineData }, candleStyles: CandleStyle) => {
     const k = data.current
@@ -187,9 +189,10 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     const name = s?.shortName ?? s?.name ?? s?.ticker ?? ''
     const price = (v: number) => utils.formatPrecision(v, candlePricePrecision)
     const timeFormat = period().timespan === 'second' ? 'YYYY-MM-DD HH:mm:ss' : 'YYYY-MM-DD HH:mm'
+    const dateTimeFormat = candleDateTimeFormat ??= buildDateTimeFormat(timezone().key)
     return [
       { title: '', value: { text: name, color: titleColor } },
-      { title: { text: 'Time: ', color: labelColor }, value: { text: utils.formatDate(candleDateTimeFormat, k.timestamp, timeFormat), color: labelColor } },
+      { title: { text: 'Time: ', color: labelColor }, value: { text: utils.formatDate(dateTimeFormat, k.timestamp, timeFormat), color: labelColor } },
       { title: { text: 'O: ', color: labelColor }, value: { text: price(k.open), color: valueColor } },
       { title: { text: 'H: ', color: labelColor }, value: { text: price(k.high), color: valueColor } },
       { title: { text: 'L: ', color: labelColor }, value: { text: price(k.low), color: valueColor } },
@@ -894,14 +897,20 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     if (!widget) {
       return
     }
-    widget.setStyles({ crosshair: { show: mode === 'crosshair' } })
+    const show = mode === 'crosshair'
+    if (widget.getStyles().crosshair.show !== show) {
+      widget.setStyles({ crosshair: { show } })
+    }
     const cursor = mode === 'arrow' ? 'default' : 'crosshair'
     const doms = [widget.getDom(), ...paneIds.map(paneId => widget!.getDom(paneId, DomPosition.Main))]
     doms.forEach(dom => { if (dom) dom.style.cursor = cursor })
   }
 
   const applyCandleType = (type: ChartType) => {
-    widget?.setStyles({ candle: { type: nativeCandleType(type) } })
+    const nativeType = nativeCandleType(type)
+    if (widget && widget.getStyles().candle.type !== nativeType) {
+      widget.setStyles({ candle: { type: nativeType } })
+    }
   }
 
   const presentData = () => {
@@ -1054,7 +1063,10 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   // last-price line is noise on second periods — hide the line, keep the axis
   // badge (priceMark.last.text draws it, independent of .line.show).
   const applyLastPriceLineForPeriod = (p: Period): void => {
-    widget?.setStyles({ candle: { priceMark: { last: { line: { show: !isLineLockedPeriod(p) } } } } })
+    const show = !isLineLockedPeriod(p)
+    if (widget && widget.getStyles().candle.priceMark.last.line.show !== show) {
+      widget.setStyles({ candle: { priceMark: { last: { line: { show } } } } })
+    }
   }
 
   const closeIndicatorSettings = () => {
@@ -1815,7 +1827,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         const list = widget.getDataList()
         if (list.length === 0 || list[0].timestamp <= target) break
         const p = untrack(period)
-        const [to] = adjustFromTo(p, list[0].timestamp - 1, 1)
+        const [, to] = adjustFromTo(p, list[0].timestamp - 1, 1)
         const [from] = adjustFromTo(p, to, 500)
         let older: KLineData[] = []
         try {
@@ -1868,8 +1880,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       hide()
       return
     }
-    const remaining = last.timestamp + periodDurationMs(untrack(period)) - Date.now()
-    if (remaining > periodDurationMs(untrack(period))) {
+    const barEnd = bucketEnd(last.timestamp, untrack(period))
+    const remaining = barEnd - Date.now()
+    if (remaining > barEnd - last.timestamp) {
       hide()
       return
     }
@@ -1908,23 +1921,13 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         break
       }
       case 'week': {
-        const date = new Date(to)
-        const week = date.getDay()
-        const dif = week === 0 ? 6 : week - 1
-        to = to - dif * 60 * 60 * 24
-        const newDate = new Date(to)
-        to = new Date(`${newDate.getFullYear()}-${newDate.getMonth() + 1}-${newDate.getDate()}`).getTime()
-        from = count * period.multiplier * 7 * 24 * 60 * 60 * 1000
+        to = to - (to % (60 * 60 * 1000))
+        from = to - count * period.multiplier * 7 * 24 * 60 * 60 * 1000
         break
       }
       case 'month': {
-        const date = new Date(to)
-        const year = date.getFullYear()
-        const month = date.getMonth() + 1
-        to = new Date(`${year}-${month}-01`).getTime()
-        from = count * period.multiplier * 30 * 24 * 60 * 60 * 1000
-        const fromDate = new Date(from)
-        from = new Date(`${fromDate.getFullYear()}-${fromDate.getMonth() + 1}-01`).getTime()
+        to = to - (to % (60 * 60 * 1000))
+        from = to - count * period.multiplier * 31 * 24 * 60 * 60 * 1000
         break
       }
       case 'year': {
@@ -2100,7 +2103,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       loadingMore = true
       const get = async () => {
         const p = period()
-        const [to] = adjustFromTo(p, timestamp!, 1)
+        const [, to] = adjustFromTo(p, timestamp! - 1, 1)
         const [from] = adjustFromTo(p, to, 500)
         try {
           const kLineDataList = await props.datafeed.getHistoryKLineData(symbol(), p, from, to)

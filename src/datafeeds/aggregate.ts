@@ -22,7 +22,7 @@ import type {
 
 /**
  * UX-002: wrap a feed so intervals it does not natively serve are built by
- * client-side aggregation from its widest finer base interval. Everything the
+ * client-side aggregation from its widest evenly-dividing base. Everything the
  * base feed serves passes through untouched; the chart pipeline (history
  * paging, live updates, HTF studies, compares) needs no changes.
  */
@@ -39,6 +39,8 @@ interface TargetState {
   callback: DatafeedSubscribeCallback
   /** The last aggregated bar; seeds live merging after the history handoff. */
   tail: KLineData | null
+  /** The last base bar merged into `tail`; a forming bar repeats with cumulative volume. */
+  lastBase: KLineData | null
 }
 
 interface BaseSubscription {
@@ -80,23 +82,28 @@ export function createAggregatingDatafeed (base: Datafeed, options: AggregatingD
   // multiplex: only one forwarded subscribe per (symbol, basePeriod) exists.
   const baseSubs = new Map<string, BaseSubscription>()
   const targets = new Map<string, TargetState>()
+  // The chart loads history before subscribing, so the seed has to outlive the fetch.
+  const seeds = new Map<string, Pick<TargetState, 'tail' | 'lastBase'>>()
 
   const emitTarget = (target: TargetState, baseBar: KLineData, basePeriodMs: number): void => {
     const bucketMs = periodDurationMs(target.targetPeriod)
-    const start = bucketStart(baseBar.timestamp, bucketMs)
+    const start = bucketStart(baseBar.timestamp, target.targetPeriod)
     const tail = target.tail
-    if (tail === null || start > bucketStart(tail.timestamp, bucketMs)) {
+    if (tail === null || start > bucketStart(tail.timestamp, target.targetPeriod)) {
       // Rollover: the previous bucket is complete (every merge already emitted
       // it, and history handed it to the chart), so only the fresh bucket goes
       // out. The chart pushes bars newer than its last timestamp.
       target.tail = newBucket(start, baseBar)
+      target.lastBase = baseBar
       target.callback(target.tail)
       return
     }
-    if (start < bucketStart(tail.timestamp, bucketMs)) return // stale base bar
+    if (start < bucketStart(tail.timestamp, target.targetPeriod)) return // stale base bar
     // Same bucket: merge in place and emit a clone (the chart replaces
     // same-timestamp bars).
-    mergeIntoBucket(tail, baseBar)
+    const counted = target.lastBase?.timestamp === baseBar.timestamp ? target.lastBase.volume ?? 0 : 0
+    mergeIntoBucket(tail, { ...baseBar, volume: (baseBar.volume ?? 0) - counted })
+    target.lastBase = baseBar
     if (basePeriodMs >= bucketMs) return // defensive; pickBasePeriod prevents this
     target.callback({ ...tail })
   }
@@ -137,24 +144,31 @@ export function createAggregatingDatafeed (base: Datafeed, options: AggregatingD
         const basePeriod = basePeriodFor(period)
         if (basePeriod !== null) {
           // Fetch from the bucket opening so the first bucket is complete.
-          const bucketMs = periodDurationMs(period)
-          const bars = await base.getHistoryKLineData(symbol, basePeriod, bucketStart(from, bucketMs), to)
+          const firstBucket = bucketStart(from, period)
+          const bars = await base.getHistoryKLineData(symbol, basePeriod, firstBucket, to)
           const aggregated = aggregateBars(bars, period)
           // Seed the live state so subscribe() hands off from this exact bar.
           // Forward-only: an older-history backfill must not regress a newer
           // live bucket.
           const targetKey = stateKey(symbol, period)
           const target = targets.get(targetKey)
-          if (target !== undefined && aggregated.length > 0) {
+          if (aggregated.length > 0) {
             const tail = aggregated[aggregated.length - 1]
-            if (target.tail === null || tail.timestamp > target.tail.timestamp) {
+            const lastBase = bars[bars.length - 1]
+            if (target === undefined) {
+              const seed = seeds.get(targetKey)
+              if (seed?.tail == null || tail.timestamp >= seed.tail.timestamp) {
+                seeds.set(targetKey, { tail: { ...tail }, lastBase })
+              }
+            } else if (target.tail === null || tail.timestamp > target.tail.timestamp) {
               target.tail = { ...tail }
+              target.lastBase = lastBase
             }
           }
           // Keep every bucket whose opening the window covers — the fetch
           // clamp made the boundary bucket complete, so the left edge is a
           // full candle instead of a half-formed one.
-          return aggregated.filter(bar => bar.timestamp >= bucketStart(from, bucketMs) && bar.timestamp <= to)
+          return aggregated.filter(bar => bar.timestamp >= firstBucket && bar.timestamp <= to)
         }
       }
       return base.getHistoryKLineData(symbol, period, from, to)
@@ -175,7 +189,16 @@ export function createAggregatingDatafeed (base: Datafeed, options: AggregatingD
       }
       const existing = targets.get(targetKey)
       if (existing !== undefined) detachTarget(targetKey)
-      targets.set(targetKey, { targetKey, targetPeriod: period, symbol, callback, tail: existing?.tail ?? null })
+      const seed = seeds.get(targetKey)
+      seeds.delete(targetKey)
+      targets.set(targetKey, {
+        targetKey,
+        targetPeriod: period,
+        symbol,
+        callback,
+        tail: existing?.tail ?? seed?.tail ?? null,
+        lastBase: existing?.lastBase ?? seed?.lastBase ?? null
+      })
       attachTarget(stateKey(symbol, basePeriod), targets.get(targetKey)!)
     },
 

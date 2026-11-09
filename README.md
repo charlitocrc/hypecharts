@@ -20,7 +20,7 @@ Other scripts:
 | `npm run build` | Library build (ESM/UMD + bundled vendored core + d.ts) |
 | `npm run docs:dev` | Docs site (vitepress) |
 | `npm run build:demo` | Static demo build → `dist-demo/` (Cloudflare Pages: build command + output dir) |
-| `node benchmarks/<name>.mjs` | Performance/behavior harnesses — see [CONTRIBUTING.md](CONTRIBUTING.md#benchmarks) |
+| `node benchmarks/<name>.mjs` | Performance/behavior harnesses — see [benchmarks/README.md](benchmarks/README.md) |
 
 ### Using the library
 

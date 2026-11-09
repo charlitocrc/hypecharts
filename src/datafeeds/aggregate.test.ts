@@ -137,6 +137,32 @@ describe('createAggregatingDatafeed — live', () => {
     expect(received.map(bar => bar.timestamp)).toEqual([t0 + 180_000])
   })
 
+  it('keeps the history bucket when the chart subscribes after loading it', async () => {
+    const t0 = Date.UTC(2023, 10, 14, 22, 0)
+    const source = minuteBars(t0, 2)
+    const base = recordedFeed({ intervals: [MINUTE], history: source })
+    const feed = createAggregatingDatafeed(base, { customPeriods: [THREE_M] })
+    await feed.getHistoryKLineData(SYMBOL, THREE_M, t0, t0 + 600_000)
+    const received: KLineData[] = []
+    feed.subscribe(SYMBOL, THREE_M, bar => received.push(bar))
+    base.emit(MINUTE, minuteBars(t0 + 120_000, 1)[0])
+    expect(received[0].open).toBe(source[0].open)
+    expect(received[0].volume).toBe(15)
+  })
+
+  it('counts a forming base bar\'s cumulative volume once', async () => {
+    const t0 = Date.UTC(2023, 10, 14, 22, 0)
+    const forming = { ...minuteBars(t0, 1)[0], volume: 10 }
+    const base = recordedFeed({ intervals: [MINUTE], history: [forming] })
+    const feed = createAggregatingDatafeed(base, { customPeriods: [THREE_M] })
+    await feed.getHistoryKLineData(SYMBOL, THREE_M, t0, t0 + 600_000)
+    const received: KLineData[] = []
+    feed.subscribe(SYMBOL, THREE_M, bar => received.push(bar))
+    base.emit(MINUTE, { ...forming, volume: 12 })
+    base.emit(MINUTE, { ...forming, volume: 15 })
+    expect(received.map(bar => bar.volume)).toEqual([12, 15])
+  })
+
   it('keeps a stale base bar from rolling the bucket backwards', () => {
     const base = recordedFeed({ intervals: [MINUTE] })
     const feed = createAggregatingDatafeed(base, { customPeriods: [THREE_M] })

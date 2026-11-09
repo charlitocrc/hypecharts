@@ -2,6 +2,7 @@
 
 import { defineConfig } from 'vite'
 import solidPlugin from 'vite-plugin-solid'
+import { minify } from 'terser'
 
 export default defineConfig({
   plugins: [solidPlugin()],
@@ -17,6 +18,19 @@ export default defineConfig({
       // package is self-contained and a registry-installed stock klinecharts
       // would silently miss every fork patch.
       output: {
+        // Keep Vite's ESM compression and pure annotations for downstream
+        // tree-shaking. Further compress only the standalone UMD bundle.
+        plugins: [{
+          name: 'compress-umd',
+          async renderChunk (code, _chunk, output) {
+            if (output.format !== 'umd') return null
+            const result = await minify(code, {
+              compress: { passes: 2 }, safari10: true,
+              sourceMap: !!output.sourcemap
+            })
+            return { code: result.code!, map: result.map as string }
+          }
+        }],
         assetFileNames: (chunkInfo) => {
           if (chunkInfo.name === 'style.css') {
             return 'klinecharts-pro.css'

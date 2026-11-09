@@ -98,6 +98,7 @@ export interface SymbolResolveError {
 }
 
 export interface Datafeed {
+  /** Week bars must open Monday 00:00 UTC and month bars on the 1st at 00:00 UTC. */
   getHistoryKLineData (symbol: SymbolInfo, period: Period, from: number, to: number): Promise<KLineData[]>
   subscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void
   unsubscribe (symbol: SymbolInfo, period: Period): void

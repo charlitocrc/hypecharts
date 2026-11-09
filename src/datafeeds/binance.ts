@@ -24,6 +24,7 @@ import { parseSymbolName } from '../symbolSelect'
 import { SECOND_PERIOD, TradeBarBuilder, barsFromTrades, isSecondIntervalText, isSecondPeriod } from './tradeBars'
 import type { TradeTick } from './tradeBars'
 
+const HISTORY_PAGE_SIZE = 500
 const REST_BASE = { spot: 'https://api.binance.com', usdm: 'https://fapi.binance.com' } as const
 const REST_PATH = { spot: '/api/v3/klines', usdm: '/fapi/v1/klines' } as const
 const AGG_TRADES_PATH = { spot: '/api/v3/aggTrades', usdm: '/fapi/v1/aggTrades' } as const
@@ -267,16 +268,24 @@ export class BinanceDatafeed implements Datafeed {
 
   async getHistoryKLineData (symbol: SymbolInfo, period: Period, from: number, to: number): Promise<KLineData[]> {
     if (isSecondPeriod(period)) return this.getSecondHistory(symbol, from, to)
-    const url = `${REST_BASE[this.market]}${REST_PATH[this.market]
-    }?symbol=${toBinanceSymbol(symbol, this.market)
-    }&interval=${toBinanceInterval(period)}&startTime=${from}&endTime=${to}&limit=500`
-    const response = await fetch(url)
-    if (!response.ok) {
-      throw new Error(`Binance history failed: ${response.status}`)
+    // Built intervals can span more than one request's worth of base bars.
+    const bars: KLineData[] = []
+    let startTime = from
+    while (true) {
+      const url = `${REST_BASE[this.market]}${REST_PATH[this.market]
+      }?symbol=${toBinanceSymbol(symbol, this.market)
+      }&interval=${toBinanceInterval(period)}&startTime=${startTime}&endTime=${to}&limit=${HISTORY_PAGE_SIZE}`
+      const response = await fetch(url)
+      if (!response.ok) {
+        throw new Error(`Binance history failed: ${response.status}`)
+      }
+      const rows = await response.json()
+      if (!Array.isArray(rows)) return bars
+      const page = parseKlines(rows)
+      bars.push(...page)
+      if (page.length < HISTORY_PAGE_SIZE) return bars
+      startTime = page[page.length - 1].timestamp + 1
     }
-    const rows = await response.json()
-    if (!Array.isArray(rows)) return []
-    return parseKlines(rows)
   }
 
   /** 1s history: real spot 1s klines; USDT-M has none, so aggregate the latest aggTrades page. */

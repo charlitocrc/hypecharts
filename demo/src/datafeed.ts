@@ -1,13 +1,17 @@
 /**
  * Demo feed wiring: one composite datafeed over every reachable venue, so the
  * chart is built once and symbol switches are just `setSymbol('VENUE:SYMBOL')`.
- * Each venue is probed once; a venue that fails the probe (geo-block, offline)
+ * Each venue is probed once; the initial workspace waits only for its venues.
+ * A venue that fails the probe (geo-block, offline)
  * is left out of the routes and surfaced to the UI. If nothing is reachable the
  * page falls back to a synthetic random walk routed under HYPERLIQUID keys.
  */
-import type { Datafeed, KLineData } from '../../src'
-import { BinanceDatafeed, HyperliquidDatafeed, createAggregatingDatafeed, createCompositeDatafeed } from '../../src'
-import type { CompositeRoute } from '../../src'
+import type { KLineData } from 'klinecharts'
+import { BinanceDatafeed } from '../../src/datafeeds/binance'
+import { HyperliquidDatafeed } from '../../src/datafeeds/hyperliquid'
+import { createAggregatingDatafeed } from '../../src/datafeeds/aggregate'
+import { createCompositeDatafeed } from '../../src/datafeeds/composite'
+import type { Datafeed } from '../../src/types'
 import type { DatafeedSubscribeCallback, Period, SymbolInfo } from '../../src/types'
 
 /** Custom intervals served by client-side aggregation (UX-002). */
@@ -17,14 +21,19 @@ export const DEMO_CUSTOM_PERIODS: Period[] = [
   { multiplier: 12, timespan: 'hour', text: '12h' }
 ]
 
-export interface DemoFeed {
-  datafeed: Datafeed
+export interface DemoFeedStatus {
   /** Venue keys with a live route, e.g. ['HYPERLIQUID', 'BINANCE']. */
   venues: string[]
   label: string
 }
 
-async function probe (url: string, init: RequestInit): Promise<boolean> {
+export interface DemoFeed extends DemoFeedStatus {
+  datafeed: Datafeed
+  /** Final availability, including venues not needed by the initial workspace. */
+  discoveryComplete: Promise<DemoFeedStatus>
+}
+
+async function probe (url: string, init: RequestInit = {}): Promise<boolean> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 5000)
   try {
@@ -54,19 +63,51 @@ const binanceProbe = () => probe(
   `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&startTime=${Date.now() - 3600e3}&endTime=${Date.now()}&limit=1`
 )
 
-export async function createDemoFeed (): Promise<DemoFeed> {
-  const [hlOk, binanceOk] = await Promise.all([hlProbe(), binanceProbe()])
-  const routes: CompositeRoute[] = []
-  if (hlOk) routes.push({ feed: new HyperliquidDatafeed(), exchanges: ['HYPERLIQUID'] })
-  if (binanceOk) routes.push({ feed: new BinanceDatafeed('spot'), exchanges: ['BINANCE'] })
+export async function createDemoFeed (requiredVenues: string[] = ['HYPERLIQUID']): Promise<DemoFeed> {
+  const composite = createCompositeDatafeed()
+  const available = new Set<string>()
+  const probes = new Map([
+    ['HYPERLIQUID', hlProbe().then(ok => {
+      if (ok) { composite.addRoute({ feed: new HyperliquidDatafeed(), exchanges: ['HYPERLIQUID'] }); available.add('HYPERLIQUID') }
+      return ok
+    })],
+    ['BINANCE', binanceProbe().then(ok => {
+      if (ok) { composite.addRoute({ feed: new BinanceDatafeed('spot'), exchanges: ['BINANCE'] }); available.add('BINANCE') }
+      return ok
+    })]
+  ])
+  const status = (): DemoFeedStatus => {
+    // Stable ordering independent of which probe completed first.
+    const venues = ['HYPERLIQUID', 'BINANCE'].filter(venue => available.has(venue))
+    return { venues, label: venues.length
+      ? `LIVE · ${venues.map(venue => venue === 'HYPERLIQUID' ? 'Hyperliquid' : 'Binance').join(' + ')}`
+      : 'SIMULATED · venues unreachable' }
+  }
+  const discoveryComplete = Promise.all(probes.values()).then(status)
+  const required = [...new Set(requiredVenues.map(venue => venue.toUpperCase()))]
+  const ready = await Promise.all((required.length ? required : ['HYPERLIQUID']).map(venue => probes.get(venue) ?? Promise.resolve(false)))
+  // A failed required venue needs full discovery before choosing a fallback.
+  // A healthy selected venue never waits for an unrelated venue's timeout.
+  if (ready.some(ok => !ok)) await discoveryComplete
 
-  if (routes.length > 0) {
+  if (available.size > 0) {
+    // Discovery/search still see every reachable venue. Config waits before the
+    // aggregation wrapper caches the intersection of the venues' intervals.
+    const completeFeed: Datafeed = {
+      ...composite,
+      config: async () => { await discoveryComplete; return composite.config() },
+      searchSymbols: async (query, filters) => { await discoveryComplete; return composite.searchSymbols(query, filters) },
+      resolveSymbol: async name => {
+        const venue = name.split(':')[0].toUpperCase()
+        await (probes.get(venue) ?? discoveryComplete)
+        return composite.resolveSymbol(name)
+      }
+    }
     return {
       // UX-002: the aggregator layers custom intervals (2m/3m/12h plus anything
       // built in the period menu) over the composite's native series.
-      datafeed: createAggregatingDatafeed(createCompositeDatafeed(routes), { customPeriods: DEMO_CUSTOM_PERIODS }),
-      venues: routes.flatMap(route => route.exchanges),
-      label: `LIVE · ${routes.map(route => route.exchanges[0] === 'HYPERLIQUID' ? 'Hyperliquid' : 'Binance').join(' + ')}`
+      datafeed: createAggregatingDatafeed(completeFeed, { customPeriods: DEMO_CUSTOM_PERIODS }),
+      ...status(), discoveryComplete
     }
   }
   return {
@@ -75,7 +116,7 @@ export async function createDemoFeed (): Promise<DemoFeed> {
       { customPeriods: DEMO_CUSTOM_PERIODS }
     ),
     venues: [],
-    label: 'SIMULATED · venues unreachable'
+    label: 'SIMULATED · venues unreachable', discoveryComplete
   }
 }
 
@@ -185,7 +226,7 @@ export class SyntheticDatafeed implements Datafeed {
         last.close = last.close * (1 + move)
         last.high = Math.max(last.high, last.close)
         last.low = Math.min(last.low, last.close)
-        last.volume += entry.rng() * 4
+        last.volume = (last.volume ?? 0) + entry.rng() * 4
       }
       this.subs.get(key)?.(last)
     }, 400)

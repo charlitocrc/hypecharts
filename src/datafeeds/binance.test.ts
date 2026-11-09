@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 
-import { BINANCE_INTERVAL_PERIODS, binanceStreamName, parseAggTrades, parseKlines, parseTradeMessage, toBinanceInterval, toBinanceSymbol, precisionFromStep, parseExchangeInfo } from './binance'
+import { BINANCE_INTERVAL_PERIODS, BinanceDatafeed, binanceStreamName, parseAggTrades, parseKlines, parseTradeMessage, toBinanceInterval, toBinanceSymbol, precisionFromStep, parseExchangeInfo } from './binance'
 import { isSecondPeriod } from './tradeBars'
 
 // https://api.binance.com/api/v3/klines rows (strings for prices/volumes)
@@ -103,5 +103,26 @@ describe('binance metadata (search/resolve)', () => {
       ticker: 'BTCUSDT', base: 'BTC', quote: 'USDT',
       pricePrecision: 2, volumePrecision: 5, minPriceDelta: 0.01
     })
+  })
+})
+
+describe('binance history paging', () => {
+  const SYMBOL = { ticker: 'BTCUSDT', exchange: 'BINANCE', pricePrecision: 2, volumePrecision: 3 }
+  const MINUTE = { multiplier: 1, timespan: 'minute', text: '1m' }
+
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('keeps requesting until the window is exhausted', async () => {
+    const row = (t: number) => [t, '1', '2', '0.5', '1.5', '3', t + 59_999, '4', 5, '0', '0', '0']
+    const pages = [Array.from({ length: 500 }, (_, i) => row(i * 60_000)), [row(500 * 60_000), row(501 * 60_000)]]
+    const urls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(url)
+      return { ok: true, json: async () => pages[urls.length - 1] }
+    }))
+    const bars = await new BinanceDatafeed('spot').getHistoryKLineData(SYMBOL, MINUTE, 0, 600 * 60_000)
+    expect(bars).toHaveLength(502)
+    expect(urls).toHaveLength(2)
+    expect(urls[1]).toContain(`startTime=${499 * 60_000 + 1}`)
   })
 })

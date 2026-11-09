@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 
-import { HL_INTERVAL_PERIODS, hlSubscription, parseCandleSnapshot, parseHlTrade, toHlInterval, parseHlUniverse, hlPricePrecision } from './hyperliquid'
+import { HL_INTERVAL_PERIODS, HyperliquidDatafeed, hlSubscription, parseCandleSnapshot, parseHlTrade, toHlInterval, parseHlUniverse, hlPricePrecision } from './hyperliquid'
 import { barsFromTrades, isSecondPeriod } from './tradeBars'
 
 // https://api.hyperliquid.xyz/info candleSnapshot rows are objects
@@ -94,5 +94,60 @@ describe('hyperliquid metadata (search/resolve)', () => {
     expect(hlPricePrecision(1)).toBe(5)   // DOGE-like
     expect(hlPricePrecision(0)).toBe(6)
     expect(hlPricePrecision(8)).toBe(0)
+  })
+})
+
+describe('hyperliquid calendar periods', () => {
+  const SYMBOL = { ticker: 'BTC', exchange: 'HYPERLIQUID', pricePrecision: 1, volumePrecision: 2 }
+  const WEEK = { multiplier: 1, timespan: 'week', text: '1w' }
+  const DAY = { multiplier: 1, timespan: 'day', text: '1d' }
+
+  class FakeSocket {
+    static OPEN = 1
+    static last: FakeSocket
+    readyState = 1
+    sent: Array<{ method: string, subscription: { interval: string } }> = []
+    onopen?: () => void
+    onmessage?: (event: { data: string }) => void
+    constructor () { FakeSocket.last = this }
+    send (text: string): void { this.sent.push(JSON.parse(text)) }
+    close (): void { this.readyState = 3 }
+    candle (t: number, v: number): void {
+      this.onmessage?.({ data: JSON.stringify({ channel: 'candle', data: { s: 'BTC', i: '1d', t, o: 1, h: 2, l: 1, c: 2, v } }) })
+    }
+  }
+
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('rebuilds 1w from 1d into Monday weeks', async () => {
+    const rows = [Date.UTC(2024, 0, 7), Date.UTC(2024, 0, 8), Date.UTC(2024, 0, 9)].map(t =>
+      ({ t, s: 'BTC', i: '1d', o: '1', c: '2', h: '3', l: '0.5', v: '4' }))
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => rows }))
+    vi.stubGlobal('fetch', fetchMock)
+    const feed = new HyperliquidDatafeed()
+    await feed.config()
+    const bars = await feed.getHistoryKLineData(SYMBOL, WEEK, Date.UTC(2024, 0, 1), Date.UTC(2024, 0, 10))
+    expect(JSON.parse((fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body).req.interval).toBe('1d')
+    expect(bars.map(bar => [bar.timestamp, bar.volume])).toEqual([[Date.UTC(2024, 0, 1), 4], [Date.UTC(2024, 0, 8), 8]])
+  })
+
+  it('shares the 1d stream between a daily chart and a weekly study', async () => {
+    vi.stubGlobal('WebSocket', FakeSocket)
+    const feed = new HyperliquidDatafeed()
+    await feed.config()
+    const daily: number[] = []
+    const weekly: number[] = []
+    feed.subscribe(SYMBOL, DAY, bar => daily.push(bar.timestamp))
+    const socket = FakeSocket.last
+    feed.subscribe(SYMBOL, WEEK, bar => weekly.push(bar.timestamp))
+    expect(socket.sent).toHaveLength(0) // onopen sends it; no duplicate venue subscribe
+    const tuesday = Date.UTC(2024, 0, 9)
+    socket.candle(tuesday, 1)
+    expect(daily).toEqual([tuesday])
+    expect(weekly).toEqual([Date.UTC(2024, 0, 8)])
+    feed.unsubscribe(SYMBOL, DAY)
+    expect(socket.sent).toHaveLength(0) // the weekly study still needs it
+    feed.unsubscribe(SYMBOL, WEEK)
+    expect(socket.sent.map(message => message.method)).toEqual(['unsubscribe'])
   })
 })

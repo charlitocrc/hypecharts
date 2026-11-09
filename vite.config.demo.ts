@@ -13,5 +13,9 @@ export default defineConfig({
   resolve: { preserveSymlinks: true },
   optimizeDeps: { include: ['klinecharts'] },
   server: { port: 5180 },
-  build: { outDir: '../dist-demo', emptyOutDir: true }
+  build: {
+    outDir: '../dist-demo', emptyOutDir: true,
+    minify: 'terser',
+    terserOptions: { compress: { passes: 2 } }
+  }
 })

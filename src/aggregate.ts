@@ -18,14 +18,36 @@ import type { Period } from './types'
 
 /**
  * UX-002: client-side candle aggregation. Custom intervals are built by
- * merging a natively-served base series into fixed buckets anchored to the
- * epoch (bucket open = floor(timestamp / bucketMs) * bucketMs), so a 6h bucket
- * is always 00/06/12/18 UTC regardless of which base bars fed it.
+ * merging a natively-served base series into fixed UTC buckets, so a 6h bucket
+ * is always 00/06/12/18 UTC regardless of which base bars fed it. Intraday and
+ * day buckets are anchored to the epoch; weeks open Monday 00:00 UTC and months
+ * on the 1st at 00:00 UTC, on every venue.
  */
 
-/** UTC-anchored open timestamp of the bucket `timestamp` falls into. */
-export function bucketStart (timestamp: number, bucketMs: number): number {
-  return Math.floor(timestamp / bucketMs) * bucketMs
+const DAY_MS = 24 * 60 * 60 * 1000
+/** 1970-01-05, the first Monday after the epoch. */
+const FIRST_MONDAY_MS = 4 * DAY_MS
+
+export const isCalendar = (period: Period): boolean => period.timespan === 'week' || period.timespan === 'month'
+
+/** UTC open timestamp of the `period` bucket that `timestamp` falls into. */
+export function bucketStart (timestamp: number, period: Period): number {
+  if (period.timespan === 'month') {
+    const date = new Date(timestamp)
+    const months = date.getUTCFullYear() * 12 + date.getUTCMonth()
+    const start = Math.floor(months / period.multiplier) * period.multiplier
+    return Date.UTC(Math.floor(start / 12), start % 12)
+  }
+  const bucketMs = periodDurationMs(period)
+  const anchor = period.timespan === 'week' ? FIRST_MONDAY_MS : 0
+  return Math.floor((timestamp - anchor) / bucketMs) * bucketMs + anchor
+}
+
+/** Close timestamp of the `period` bucket opening at `start`; months vary in length. */
+export function bucketEnd (start: number, period: Period): number {
+  if (period.timespan !== 'month') return start + periodDurationMs(period)
+  const date = new Date(start)
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + period.multiplier)
 }
 
 /** Merge `bar` into `bucket` (open kept, extremes kept, close/volume replaced/summed). */
@@ -49,7 +71,7 @@ export function aggregateBars (bars: KLineData[], period: Period): KLineData[] {
   let current: KLineData | null = null
   let currentStart = Number.NaN
   for (const bar of bars) {
-    const start = bucketStart(bar.timestamp, bucketMs)
+    const start = bucketStart(bar.timestamp, period)
     if (start === currentStart && current !== null) {
       mergeIntoBucket(current, bar)
     } else {
@@ -63,16 +85,20 @@ export function aggregateBars (bars: KLineData[], period: Period): KLineData[] {
 }
 
 /**
- * Pick the widest natively-served period that subdivides `period` into at
- * least two buckets (target/2 or smaller), so history fetches stay cheap and
- * every bucket merges from ≥ 2 base bars. Falls back to the smallest candidate.
+ * Pick the widest natively-served period that divides `period` evenly, so no
+ * base bar straddles a bucket boundary and history fetches stay cheap. Week and
+ * month targets need a base that fits inside one UTC day, or the same calendar
+ * unit; week and month bases never feed epoch-anchored targets. Null when no
+ * candidate qualifies.
  */
 export function pickBasePeriod (period: Period, candidates: Period[]): Period | null {
   if (candidates.length === 0) return null
   const targetMs = periodDurationMs(period)
   const usable = candidates.filter(candidate => {
     const ms = periodDurationMs(candidate)
-    return ms > 0 && ms < targetMs
+    if (ms <= 0 || ms >= targetMs || targetMs % ms !== 0) return false
+    if (isCalendar(candidate)) return candidate.timespan === period.timespan
+    return !isCalendar(period) || DAY_MS % ms === 0
   })
   if (usable.length === 0) return null
   return usable.reduce((best, candidate) =>

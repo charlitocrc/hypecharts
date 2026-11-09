@@ -1,5 +1,5 @@
-import { createChartGrid, createChartSyncGroup, ChartGrid, ChartSyncGroup, KLineChartPro } from '../../src'
-import type { ChartSyncGroup } from '../../src'
+import { createChartGrid, KLineChartPro } from '../../src'
+import type { ChartGrid, ChartSyncGroup } from '../../src'
 import type { Period, SymbolInfo } from '../../src/types'
 import { createDemoFeed } from './datafeed'
 import './style.css'
@@ -130,6 +130,7 @@ const saveWorkspace = (): void => {
   } catch {}
 }
 let liveVenues = new Set<string>()
+let discoveringVenues = true
 let activeVenue = INITIAL_VENUE
 let activeAssetIndex = 0
 let currentTheme = 'dark'
@@ -157,7 +158,8 @@ function syncChromeFromChart (): void {
   if (!chart || !chart.getChart()) return
   const resolved = chart.resolvedSymbol()
   if (!resolved?.exchange) return
-  const venue = VENUES.find(candidate => candidate.key === resolved.exchange.toUpperCase())
+  const exchange = resolved.exchange.toUpperCase()
+  const venue = VENUES.find(candidate => candidate.key === exchange)
   if (!venue || venue.key === activeVenue.key && ASSETS[activeAssetIndex]?.ticker === (resolved.shortName ?? resolved.ticker).replace(/-PERP|USDT$/i, '')) return
   activeVenue = venue
   const ticker = (resolved.shortName ?? resolved.ticker).replace(/-PERP|USDT$/i, '')
@@ -191,9 +193,10 @@ function renderExchangeButtons (): void {
   VENUES.forEach(venue => {
     const live = venue.integrated && liveVenues.has(venue.key)
     const probed = venue.integrated && liveVenues.size > 0
+    const pending = venue.integrated && !live && discoveringVenues
     const node = document.createElement(live ? 'button' : 'span')
     node.className = `chip exchange ${live ? 'live' : (probed ? 'roadmap' : 'roadmap')}` + (venue.key === activeVenue.key ? ' active' : '')
-    node.textContent = live ? venue.label : `${venue.label} · ${venue.integrated ? 'roadmap' : 'roadmap'}`
+    node.textContent = live ? venue.label : `${venue.label} · ${pending ? 'checking…' : venue.integrated ? 'unavailable' : 'roadmap'}`
     if (live) {
       node.setAttribute('aria-label', `Switch to ${venue.label}`)
       node.addEventListener('click', () => {
@@ -202,7 +205,9 @@ function renderExchangeButtons (): void {
         renderSymbolButtons()
         applySymbol()
       })
-    } else if (venue.integrated && probed) {
+    } else if (pending) {
+      node.title = 'Checking connection'
+    } else if (venue.integrated) {
       node.title = 'Not reachable from this network'
     } else {
       node.title = 'Planned integration — see docs/roadmap.md'
@@ -215,14 +220,28 @@ async function main (): Promise<void> {
   renderExchangeButtons()
   renderSymbolButtons()
 
-  const demo = await createDemoFeed()
+  const savedOnMount = readWorkspace()
+  const initialCells = savedOnMount?.layout === 'split' ? savedOnMount.cells : savedOnMount?.cells.slice(0, 1)
+  const requiredVenues = savedOnMount?.layout === 'split' ? ['HYPERLIQUID', 'BINANCE']
+    : initialCells?.map(cell => cell.symbol?.split(':')[0]).filter((venue): venue is string => !!venue)
+  const demo = await createDemoFeed(requiredVenues?.length ? requiredVenues : undefined)
   ;(window as unknown as { __demoFeed: typeof demo.datafeed }).__demoFeed = demo.datafeed
   liveVenues = new Set(demo.venues)
   setStatus(demo.label, demo.venues.length > 0 ? 'live' : 'simulated')
   renderExchangeButtons()
   renderSymbolButtons()
 
-  const createChart = (container: HTMLElement, symbol: SymbolInfo | string, periodText?: string, timeAxisVisible = true): KLineChartPro =>
+  void demo.discoveryComplete.then(status => {
+    discoveringVenues = false
+    liveVenues = new Set(status.venues)
+    if (!el('feed-status').classList.contains('error')) {
+      setStatus(status.label, status.venues.length > 0 ? 'live' : 'simulated')
+    }
+    renderExchangeButtons()
+    renderSymbolButtons()
+  })
+
+  const createChart = (container: HTMLElement, symbol: SymbolInfo, periodText?: string, timeAxisVisible = true): KLineChartPro =>
     new KLineChartPro({
       container,
       theme: currentTheme,
@@ -251,7 +270,6 @@ async function main (): Promise<void> {
   // venue below — one sync group keeps range and crosshair together (M5).
   // WORK-002: the layout itself comes from the library's grid helper, and each
   // cell's symbol/period persists so a reload restores the workspace.
-  const savedOnMount = readWorkspace()
   if (savedOnMount?.layout === 'split') splitLayout = true
   syncGroup = null
   charts = []
@@ -269,12 +287,12 @@ async function main (): Promise<void> {
     const asset = ASSETS[activeAssetIndex]
     const venues = VENUES.filter(candidate => candidate.integrated && liveVenues.has(candidate.key))
     const primary = activeVenue.integrated && liveVenues.has(activeVenue.key) ? activeVenue : venues[0] ?? INITIAL_VENUE
-    const defaultSpecFor = (index: number): SymbolInfo => {
+    const defaultSpecFor = (index: number): SymbolInfo | string => {
       if (splitLayout && venues.length > 1) {
         if (index === 0) return previous ?? primary.nameFor(asset)
         return venues.find(candidate => candidate.key !== primary.key)!.nameFor(asset)
       }
-      return index === 0 ? (previous ?? initialSymbol) : initialSymbol
+      return index === 0 ? (previous ?? (primary.key === INITIAL_VENUE.key ? initialSymbol : primary.nameFor(asset))) : initialSymbol
     }
     const periodFor = (index: number): string | undefined => saved?.cells[index]?.period
     grid = createChartGrid({
@@ -288,10 +306,11 @@ async function main (): Promise<void> {
         // through setSymbol); the venue-specific target then goes through
         // setSymbol, which resolves qualified names through the feed.
         const chart = createChart(cell, index === 0 ? (previous ?? initialSymbol) : initialSymbol, periodFor(index), timeAxisVisible)
-        const target = defaultSpecFor(index)
-        if (target !== chart.getSymbol()) chart.setSymbol(target)
         const savedSymbol = saved?.cells[index]?.symbol
-        if (savedSymbol !== undefined && !savedSymbol.includes('undefined')) chart.setSymbol(savedSymbol)
+        // Resolve one target. Starting the default and saved symbols together
+        // lets a slower default resolution overwrite the restored selection.
+        const target = savedSymbol !== undefined && !savedSymbol.includes('undefined') ? savedSymbol : defaultSpecFor(index)
+        if (target !== chart.getSymbol()) chart.setSymbol(target)
         return chart
       }
     })
@@ -309,7 +328,7 @@ async function main (): Promise<void> {
   el<HTMLButtonElement>('layout-toggle').addEventListener('click', () => {
     const venues = VENUES.filter(candidate => candidate.integrated && liveVenues.has(candidate.key))
     if (venues.length < 2) {
-      setStatus('split needs two reachable venues', 'simulated')
+      setStatus(discoveringVenues ? 'Checking the second exchange…' : 'split needs two reachable venues', discoveringVenues ? 'live' : 'simulated')
       return
     }
     splitLayout = !splitLayout
