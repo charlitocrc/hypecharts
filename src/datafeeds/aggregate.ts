@@ -41,11 +41,15 @@ interface TargetState {
   tail: KLineData | null
   /** The last base bar merged into `tail`; a forming bar repeats with cumulative volume. */
   lastBase: KLineData | null
+  /** The base subscription it joined; the picked base can change once config loads. */
+  baseKey: string
 }
 
 interface BaseSubscription {
   symbol: SymbolInfo
   period: Period
+  /** The chart watching this period directly, alongside any built targets. */
+  native: DatafeedSubscribeCallback | null
   targets: Map<string, TargetState>
 }
 
@@ -57,6 +61,8 @@ export interface AggregatingDatafeed extends Datafeed {
   config (): Promise<DatafeedConfiguration>
   /** Register a period built at runtime (the interval builder) as aggregatable. */
   declareInterval (period: Period): void
+  /** Tear down the wrapped feed's connections, when it has any. */
+  destroy (): void
 }
 
 export function createAggregatingDatafeed (base: Datafeed, options: AggregatingDatafeedOptions = {}): AggregatingDatafeed {
@@ -108,39 +114,47 @@ export function createAggregatingDatafeed (base: Datafeed, options: AggregatingD
     target.callback({ ...tail })
   }
 
-  const attachTarget = (baseKey: string, target: TargetState): void => {
-    let sub = baseSubs.get(baseKey)
-    if (sub === undefined) {
-      const basePeriod = basePeriodFor(target.targetPeriod)
-      if (basePeriod === null) return
-      sub = { symbol: target.symbol, period: basePeriod, targets: new Map() }
-      baseSubs.set(baseKey, sub)
-      base.subscribe(sub.symbol, sub.period, bar => {
-        sub!.targets.forEach(target => emitTarget(target, bar, periodDurationMs(sub!.period)))
-      })
-    }
-    sub.targets.set(target.targetKey, target)
+  const baseSubFor = (symbol: SymbolInfo, period: Period): BaseSubscription => {
+    const baseKey = stateKey(symbol, period)
+    const existing = baseSubs.get(baseKey)
+    if (existing !== undefined) return existing
+    const sub: BaseSubscription = { symbol, period, native: null, targets: new Map() }
+    baseSubs.set(baseKey, sub)
+    base.subscribe(symbol, period, bar => {
+      sub.native?.(bar)
+      sub.targets.forEach(target => emitTarget(target, bar, periodDurationMs(period)))
+    })
+    return sub
+  }
+
+  const releaseBaseSub = (sub: BaseSubscription): void => {
+    if (sub.native !== null || sub.targets.size > 0) return
+    base.unsubscribe(sub.symbol, sub.period)
+    baseSubs.delete(stateKey(sub.symbol, sub.period))
   }
 
   const detachTarget = (targetKey: string): void => {
     const target = targets.get(targetKey)
     targets.delete(targetKey)
     if (target === undefined) return
-    const basePeriod = basePeriodFor(target.targetPeriod)
-    if (basePeriod === null) return
-    const baseKey = stateKey(target.symbol, basePeriod)
-    const sub = baseSubs.get(baseKey)
+    const sub = baseSubs.get(target.baseKey)
     if (sub === undefined) return
     sub.targets.delete(targetKey)
-    if (sub.targets.size === 0) {
-      base.unsubscribe(sub.symbol, sub.period)
-      baseSubs.delete(baseKey)
-    }
+    releaseBaseSub(sub)
   }
 
-  return {
+  // Picking a base before the venue's intervals are known can mean building
+  // from 1m, which is hundreds of requests for a wide interval.
+  let configLoad: Promise<void> | null = null
+  const intervalsLoaded = (): Promise<void> => {
+    configLoad ??= feed.config().then(() => {}, () => {})
+    return baseIntervals === null ? configLoad : Promise.resolve()
+  }
+
+  const feed: AggregatingDatafeed = {
     async getHistoryKLineData (symbol, period, from, to): Promise<KLineData[]> {
       if (!isNative(period)) {
+        await intervalsLoaded()
         const basePeriod = basePeriodFor(period)
         if (basePeriod !== null) {
           // Fetch from the bucket opening so the first bucket is complete.
@@ -175,39 +189,42 @@ export function createAggregatingDatafeed (base: Datafeed, options: AggregatingD
     },
 
     subscribe (symbol, period, callback): void {
-      if (isNative(period)) {
-        base.subscribe(symbol, period, callback)
-        return
-      }
       const targetKey = stateKey(symbol, period)
-      const basePeriod = basePeriodFor(period)
+      const basePeriod = isNative(period) ? null : basePeriodFor(period)
       if (basePeriod === null) {
-        // Nothing finer to aggregate from: forward and let the base feed
-        // apply its own fallback policy.
-        base.subscribe(symbol, period, callback)
+        // Native, or nothing finer to aggregate from: forward and let the base
+        // feed apply its own fallback policy. It shares the base subscription
+        // because base feeds keep a single callback per key.
+        baseSubFor(symbol, period).native = callback
         return
       }
       const existing = targets.get(targetKey)
       if (existing !== undefined) detachTarget(targetKey)
       const seed = seeds.get(targetKey)
       seeds.delete(targetKey)
-      targets.set(targetKey, {
+      const target: TargetState = {
         targetKey,
         targetPeriod: period,
         symbol,
         callback,
         tail: existing?.tail ?? seed?.tail ?? null,
-        lastBase: existing?.lastBase ?? seed?.lastBase ?? null
-      })
-      attachTarget(stateKey(symbol, basePeriod), targets.get(targetKey)!)
+        lastBase: existing?.lastBase ?? seed?.lastBase ?? null,
+        baseKey: stateKey(symbol, basePeriod)
+      }
+      targets.set(targetKey, target)
+      baseSubFor(symbol, basePeriod).targets.set(targetKey, target)
     },
 
     unsubscribe (symbol, period): void {
-      if (isNative(period)) {
-        base.unsubscribe(symbol, period)
+      const targetKey = stateKey(symbol, period)
+      if (targets.has(targetKey)) {
+        detachTarget(targetKey)
         return
       }
-      detachTarget(stateKey(symbol, period))
+      const sub = baseSubs.get(targetKey)
+      if (sub === undefined) return
+      sub.native = null
+      releaseBaseSub(sub)
     },
 
     async config (): Promise<DatafeedConfiguration> {
@@ -225,11 +242,11 @@ export function createAggregatingDatafeed (base: Datafeed, options: AggregatingD
       return { ...config, intervals }
     },
 
-    searchSymbols (query: string, filters?: SymbolSearchFilters): Promise<SymbolSearchResult[]> {
-      return base.searchSymbols!(query, filters)
-    },
+    // Optional capabilities stay absent when the wrapped feed lacks them, so
+    // the chart's own feature checks keep working.
+    searchSymbols: base.searchSymbols?.bind(base),
 
-    async resolveSymbol (name: string): Promise<SymbolInfo> {
+    resolveSymbol: base.resolveSymbol === undefined ? undefined : async (name: string): Promise<SymbolInfo> => {
       const info = await base.resolveSymbol!(name)
       const custom = customPeriodsSorted()
       if (info.intervals === undefined || custom.length === 0) return info
@@ -242,12 +259,15 @@ export function createAggregatingDatafeed (base: Datafeed, options: AggregatingD
       return { ...info, intervals }
     },
 
-    getServerTime (): Promise<number> {
-      return base.getServerTime!()
-    },
+    getServerTime: base.getServerTime?.bind(base),
 
     declareInterval (period: Period): void {
       declared.set(`${period.multiplier}${period.timespan}`, period)
+    },
+
+    destroy (): void {
+      (base as Datafeed & { destroy?: () => void }).destroy?.()
     }
   }
+  return feed
 }

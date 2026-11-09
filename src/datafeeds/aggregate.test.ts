@@ -73,6 +73,27 @@ describe('createAggregatingDatafeed — history', () => {
     expect(first.volume).toBe(15)
   })
 
+  it('loads the venue intervals before picking a base', async () => {
+    const FIVE_M: Period = { multiplier: 5, timespan: 'minute', text: '5m' }
+    const TEN_M: Period = { multiplier: 10, timespan: 'minute', text: '10m' }
+    const base = recordedFeed({ intervals: [MINUTE, FIVE_M] })
+    const history = vi.spyOn(base, 'getHistoryKLineData')
+    const feed = createAggregatingDatafeed(base, { customPeriods: [TEN_M] })
+    await feed.getHistoryKLineData(SYMBOL, TEN_M, 0, 600_000) // config() never called by the host
+    expect(history.mock.calls[0][1]).toBe(FIVE_M)
+  })
+
+  it('keeps optional capabilities absent and forwards destroy', () => {
+    const { searchSymbols, resolveSymbol, ...minimal } = recordedFeed()
+    const destroy = vi.fn()
+    const feed = createAggregatingDatafeed({ ...minimal, destroy } as Datafeed)
+    expect(feed.searchSymbols).toBeUndefined()
+    expect(feed.resolveSymbol).toBeUndefined()
+    expect(feed.getServerTime).toBeUndefined()
+    feed.destroy()
+    expect(destroy).toHaveBeenCalledOnce()
+  })
+
   it('passes native periods through untouched', async () => {
     const history = minuteBars(Date.UTC(2023, 10, 14, 22, 0), 5)
     const base = recordedFeed({ intervals: [MINUTE], history })
@@ -161,6 +182,44 @@ describe('createAggregatingDatafeed — live', () => {
     base.emit(MINUTE, { ...forming, volume: 12 })
     base.emit(MINUTE, { ...forming, volume: 15 })
     expect(received.map(bar => bar.volume)).toEqual([12, 15])
+  })
+
+  it('shares one base stream between a native chart and a built target', () => {
+    const base = recordedFeed({ intervals: [MINUTE] })
+    const feed = createAggregatingDatafeed(base, { customPeriods: [THREE_M] })
+    const native: number[] = []
+    const built: number[] = []
+    feed.subscribe(SYMBOL, MINUTE, bar => native.push(bar.timestamp))
+    feed.subscribe(SYMBOL, THREE_M, bar => built.push(bar.timestamp))
+    const t0 = Date.UTC(2023, 10, 14, 22, 0)
+    base.emit(MINUTE, minuteBars(t0, 1)[0])
+    expect(native).toEqual([t0])
+    expect(built).toEqual([t0])
+    feed.unsubscribe(SYMBOL, MINUTE)
+    expect(base.subs.size).toBe(1) // the built target still needs it
+    feed.unsubscribe(SYMBOL, THREE_M)
+    expect(base.subs.size).toBe(0)
+  })
+
+  it('releases a subscription forwarded because nothing could build it', async () => {
+    const base = recordedFeed({ intervals: [THREE_M] })
+    const feed = createAggregatingDatafeed(base, { customPeriods: [MINUTE] })
+    await feed.config()
+    feed.subscribe(SYMBOL, MINUTE, () => {})
+    expect([...base.subs.keys()]).toEqual(['BTC|1m'])
+    feed.unsubscribe(SYMBOL, MINUTE)
+    expect(base.subs.size).toBe(0)
+  })
+
+  it('detaches from the base it joined even after config changes the pick', async () => {
+    const FIVE_M: Period = { multiplier: 5, timespan: 'minute', text: '5m' }
+    const TEN_M: Period = { multiplier: 10, timespan: 'minute', text: '10m' }
+    const base = recordedFeed({ intervals: [MINUTE, FIVE_M] })
+    const feed = createAggregatingDatafeed(base, { customPeriods: [TEN_M] })
+    feed.subscribe(SYMBOL, TEN_M, () => {}) // config not loaded: falls back to 1m
+    await feed.config()
+    feed.unsubscribe(SYMBOL, TEN_M)
+    expect(base.subs.size).toBe(0)
   })
 
   it('keeps a stale base bar from rolling the bucket backwards', () => {

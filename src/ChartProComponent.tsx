@@ -1931,12 +1931,8 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         break
       }
       case 'year': {
-        const date = new Date(to)
-        const year = date.getFullYear()
-        to = new Date(`${year}-01-01`).getTime()
-        from = count * period.multiplier * 365 * 24 * 60 * 60 * 1000
-        const fromDate = new Date(from)
-        from = new Date(`${fromDate.getFullYear()}-01-01`).getTime()
+        to = to - (to % (60 * 60 * 1000))
+        from = to - count * period.multiplier * 366 * 24 * 60 * 60 * 1000
         break
       }
     }

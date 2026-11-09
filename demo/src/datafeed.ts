@@ -7,6 +7,7 @@
  * page falls back to a synthetic random walk routed under HYPERLIQUID keys.
  */
 import type { KLineData } from 'klinecharts'
+import { bucketEnd, bucketStart } from '../../src/aggregate'
 import { BinanceDatafeed } from '../../src/datafeeds/binance'
 import { HyperliquidDatafeed } from '../../src/datafeeds/hyperliquid'
 import { createAggregatingDatafeed } from '../../src/datafeeds/aggregate'
@@ -124,7 +125,7 @@ export async function createDemoFeed (requiredVenues: string[] = ['HYPERLIQUID']
 
 interface SyntheticSeries {
   bars: KLineData[]
-  barMs: number
+  period: Period
   rng: () => number
 }
 
@@ -162,18 +163,16 @@ export class SyntheticDatafeed implements Datafeed {
     let entry = this.series.get(key)
     if (entry) return entry
 
-    const unitMs: Record<string, number> = { second: 1e3, minute: 60e3, hour: 3600e3, day: 86400e3, week: 604800e3, month: 2592000e3 }
-    const barMs = (unitMs[period.timespan] ?? 60e3) * period.multiplier
     const rng = mulberry32(hashSeed(key))
     const base = BASE_PRICES[symbol.ticker] ?? 100
     const vol = 0.004
 
     const count = 2000
-    const lastOpen = Math.floor(Date.now() / barMs) * barMs
+    const opens = [bucketStart(Date.now(), period)]
+    while (opens.length < count) opens.unshift(bucketStart(opens[0] - 1, period))
     const bars: KLineData[] = []
     let close = base * (0.8 + rng() * 0.4)
-    for (let i = count - 1; i >= 0; i--) {
-      const timestamp = lastOpen - i * barMs
+    for (const timestamp of opens) {
       const open = close
       const drift = (rng() - 0.5) * 2 * vol
       close = open * (1 + drift)
@@ -181,7 +180,7 @@ export class SyntheticDatafeed implements Datafeed {
       const low = Math.min(open, close) * (1 - rng() * vol)
       bars.push({ timestamp, open, high, low, close, volume: 50 + rng() * 500 })
     }
-    entry = { bars, barMs, rng }
+    entry = { bars, period, rng }
     this.series.set(key, entry)
     return entry
   }
@@ -193,7 +192,7 @@ export class SyntheticDatafeed implements Datafeed {
       const open = first.open
       const close = open * (1 + (entry.rng() - 0.5) * 0.008)
       entry.bars.unshift({
-        timestamp: first.timestamp - entry.barMs,
+        timestamp: bucketStart(first.timestamp - 1, period),
         open,
         high: Math.max(open, close) * 1.002,
         low: Math.min(open, close) * 0.998,
@@ -211,10 +210,10 @@ export class SyntheticDatafeed implements Datafeed {
     if (this.timers.has(key)) return
     const timer = setInterval(() => {
       const last = entry.bars[entry.bars.length - 1]
-      const now = Date.now()
-      if (now >= last.timestamp + entry.barMs) {
+      const nextOpen = bucketEnd(last.timestamp, period)
+      if (Date.now() >= nextOpen) {
         entry.bars.push({
-          timestamp: last.timestamp + entry.barMs,
+          timestamp: nextOpen,
           open: last.close,
           high: last.close,
           low: last.close,
@@ -228,7 +227,7 @@ export class SyntheticDatafeed implements Datafeed {
         last.low = Math.min(last.low, last.close)
         last.volume = (last.volume ?? 0) + entry.rng() * 4
       }
-      this.subs.get(key)?.(last)
+      this.subs.get(key)?.({ ...entry.bars[entry.bars.length - 1] })
     }, 400)
     this.timers.set(key, timer)
   }

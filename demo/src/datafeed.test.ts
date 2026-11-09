@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createDemoFeed } from './datafeed'
+import { createDemoFeed, SyntheticDatafeed } from './datafeed'
 
 const period = { multiplier: 15, timespan: 'minute', text: '15m' } as const
 
@@ -88,5 +88,20 @@ describe('demo startup discovery', () => {
     expect(demo.label).toMatch(/^SIMULATED/)
     const now = Date.now()
     expect(await demo.datafeed.getHistoryKLineData({ ticker: 'BTC', exchange: 'HYPERLIQUID' }, period, now - 3600000, now)).not.toHaveLength(0)
+  })
+})
+
+describe('synthetic fallback calendar bars', () => {
+  const symbol = { ticker: 'BTC', exchange: 'HYPERLIQUID', pricePrecision: 1, volumePrecision: 2 }
+
+  it('opens weeks on Monday and months on the 1st, including backfill', async () => {
+    const now = Date.now()
+    const feed = new SyntheticDatafeed()
+    const weeks = await feed.getHistoryKLineData(symbol, { multiplier: 1, timespan: 'week', text: '1w' }, now - 3000 * 7 * 86_400_000, now)
+    const months = await feed.getHistoryKLineData(symbol, { multiplier: 1, timespan: 'month', text: '1M' }, now - 2100 * 31 * 86_400_000, now)
+    expect(weeks.length).toBeGreaterThan(2000)
+    expect(weeks.every(bar => new Date(bar.timestamp).getUTCDay() === 1)).toBe(true)
+    expect(months.length).toBeGreaterThan(2000)
+    expect(months.every(bar => new Date(bar.timestamp).getUTCDate() === 1)).toBe(true)
   })
 })
