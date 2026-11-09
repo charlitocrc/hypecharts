@@ -36,7 +36,7 @@ interface TargetState {
   targetKey: string
   targetPeriod: Period
   symbol: SymbolInfo
-  callback: DatafeedSubscribeCallback
+  callbacks: Set<DatafeedSubscribeCallback>
   /** The last aggregated bar; seeds live merging after the history handoff. */
   tail: KLineData | null
   /** The last base bar merged into `tail`; a forming bar repeats with cumulative volume. */
@@ -48,8 +48,10 @@ interface TargetState {
 interface BaseSubscription {
   symbol: SymbolInfo
   period: Period
-  /** The chart watching this period directly, alongside any built targets. */
-  native: DatafeedSubscribeCallback | null
+  /** The callback handed to the base feed, needed again to unsubscribe. */
+  forward: DatafeedSubscribeCallback
+  /** Listeners on this period directly, alongside any built targets. */
+  native: Set<DatafeedSubscribeCallback>
   targets: Map<string, TargetState>
 }
 
@@ -91,6 +93,11 @@ export function createAggregatingDatafeed (base: Datafeed, options: AggregatingD
   // The chart loads history before subscribing, so the seed has to outlive the fetch.
   const seeds = new Map<string, Pick<TargetState, 'tail' | 'lastBase'>>()
 
+  /** Each listener gets its own copy, since charts keep and replace bars. */
+  const notify = (listeners: Set<DatafeedSubscribeCallback>, bar: KLineData): void => {
+    listeners.forEach(listener => { listener({ ...bar }) })
+  }
+
   const emitTarget = (target: TargetState, baseBar: KLineData, basePeriodMs: number): void => {
     const bucketMs = periodDurationMs(target.targetPeriod)
     const start = bucketStart(baseBar.timestamp, target.targetPeriod)
@@ -101,7 +108,7 @@ export function createAggregatingDatafeed (base: Datafeed, options: AggregatingD
       // out. The chart pushes bars newer than its last timestamp.
       target.tail = newBucket(start, baseBar)
       target.lastBase = baseBar
-      target.callback(target.tail)
+      notify(target.callbacks, target.tail)
       return
     }
     if (start < bucketStart(tail.timestamp, target.targetPeriod)) return // stale base bar
@@ -111,25 +118,26 @@ export function createAggregatingDatafeed (base: Datafeed, options: AggregatingD
     mergeIntoBucket(tail, { ...baseBar, volume: (baseBar.volume ?? 0) - counted })
     target.lastBase = baseBar
     if (basePeriodMs >= bucketMs) return // defensive; pickBasePeriod prevents this
-    target.callback({ ...tail })
+    notify(target.callbacks, tail)
   }
 
   const baseSubFor = (symbol: SymbolInfo, period: Period): BaseSubscription => {
     const baseKey = stateKey(symbol, period)
     const existing = baseSubs.get(baseKey)
     if (existing !== undefined) return existing
-    const sub: BaseSubscription = { symbol, period, native: null, targets: new Map() }
-    baseSubs.set(baseKey, sub)
-    base.subscribe(symbol, period, bar => {
-      sub.native?.(bar)
+    const forward: DatafeedSubscribeCallback = bar => {
+      notify(sub.native, bar)
       sub.targets.forEach(target => emitTarget(target, bar, periodDurationMs(period)))
-    })
+    }
+    const sub: BaseSubscription = { symbol, period, forward, native: new Set(), targets: new Map() }
+    baseSubs.set(baseKey, sub)
+    base.subscribe(symbol, period, forward)
     return sub
   }
 
   const releaseBaseSub = (sub: BaseSubscription): void => {
-    if (sub.native !== null || sub.targets.size > 0) return
-    base.unsubscribe(sub.symbol, sub.period)
+    if (sub.native.size > 0 || sub.targets.size > 0) return
+    base.unsubscribe(sub.symbol, sub.period, sub.forward)
     baseSubs.delete(stateKey(sub.symbol, sub.period))
   }
 
@@ -195,36 +203,38 @@ export function createAggregatingDatafeed (base: Datafeed, options: AggregatingD
         // Native, or nothing finer to aggregate from: forward and let the base
         // feed apply its own fallback policy. It shares the base subscription
         // because base feeds keep a single callback per key.
-        baseSubFor(symbol, period).native = callback
+        baseSubFor(symbol, period).native.add(callback)
         return
       }
       const existing = targets.get(targetKey)
-      if (existing !== undefined) detachTarget(targetKey)
+      if (existing !== undefined) {
+        existing.callbacks.add(callback)
+        return
+      }
       const seed = seeds.get(targetKey)
       seeds.delete(targetKey)
       const target: TargetState = {
         targetKey,
         targetPeriod: period,
         symbol,
-        callback,
-        tail: existing?.tail ?? seed?.tail ?? null,
-        lastBase: existing?.lastBase ?? seed?.lastBase ?? null,
+        callbacks: new Set([callback]),
+        tail: seed?.tail ?? null,
+        lastBase: seed?.lastBase ?? null,
         baseKey: stateKey(symbol, basePeriod)
       }
       targets.set(targetKey, target)
       baseSubFor(symbol, basePeriod).targets.set(targetKey, target)
     },
 
-    unsubscribe (symbol, period): void {
+    unsubscribe (symbol, period, callback): void {
       const targetKey = stateKey(symbol, period)
-      if (targets.has(targetKey)) {
-        detachTarget(targetKey)
+      const target = targets.get(targetKey)
+      if (target?.callbacks.delete(callback) === true) {
+        if (target.callbacks.size === 0) detachTarget(targetKey)
         return
       }
       const sub = baseSubs.get(targetKey)
-      if (sub === undefined) return
-      sub.native = null
-      releaseBaseSub(sub)
+      if (sub?.native.delete(callback) === true) releaseBaseSub(sub)
     },
 
     async config (): Promise<DatafeedConfiguration> {

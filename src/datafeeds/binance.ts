@@ -171,7 +171,7 @@ export function parseExchangeInfo (info: unknown, market: BinanceMarket): Binanc
 export class BinanceDatafeed implements Datafeed {
   private sockets = new Map<string, WebSocket>()
   private retries = new Map<string, ReturnType<typeof setTimeout>>()
-  private subs = new Map<string, DatafeedSubscribeCallback>()
+  private subs = new Map<string, Set<DatafeedSubscribeCallback>>()
   private builders = new Map<string, TradeBarBuilder>()
   private destroyed = false
   private metadata: Promise<BinanceSymbolMeta[]> | null = null
@@ -313,12 +313,19 @@ export class BinanceDatafeed implements Datafeed {
 
   subscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void {
     const key = `${toBinanceSymbol(symbol, this.market)}|${toBinanceInterval(period)}`
-    this.subs.set(key, callback)
+    const listeners = this.subs.get(key)
+    if (listeners !== undefined) {
+      listeners.add(callback)
+      return
+    }
+    this.subs.set(key, new Set([callback]))
     this.connect(key)
   }
 
-  unsubscribe (symbol: SymbolInfo, period: Period): void {
+  unsubscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void {
     const key = `${toBinanceSymbol(symbol, this.market)}|${toBinanceInterval(period)}`
+    const listeners = this.subs.get(key)
+    if (listeners?.delete(callback) !== true || listeners.size > 0) return
     this.subs.delete(key)
     this.builders.delete(key)
     const retry = this.retries.get(key)
@@ -359,24 +366,25 @@ export class BinanceDatafeed implements Datafeed {
       try { msg = JSON.parse(event.data) } catch { return }
       if (msg?.e === 'trade' || msg?.e === 'aggTrade') {
         const builder = this.builders.get(key)
-        const callback = this.subs.get(key)
-        if (!builder || !callback) return
+        const listeners = this.subs.get(key)
+        if (!builder || !listeners) return
         const tick = parseTradeMessage(msg)
         if (!tick) return
         const bar = builder.push(tick)
-        if (bar) callback(bar)
+        if (bar) listeners.forEach(listener => { listener({ ...bar }) })
         return
       }
       if (msg?.e !== 'kline' || !msg.k) return
       const k = msg.k as Record<string, unknown>
-      this.subs.get(key)?.({
+      const bar: KLineData = {
         timestamp: Number(k.t),
         open: Number(k.o),
         high: Number(k.h),
         low: Number(k.l),
         close: Number(k.c),
         volume: Number(k.v)
-      })
+      }
+      this.subs.get(key)?.forEach(listener => { listener({ ...bar }) })
     }
 
     ws.onclose = () => {

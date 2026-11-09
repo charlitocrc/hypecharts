@@ -53,7 +53,7 @@ One interface to implement — [`src/types.ts`](src/types.ts):
 interface Datafeed {
   getHistoryKLineData (symbol: SymbolInfo, period: Period, from: number, to: number): Promise<KLineData[]>
   subscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void
-  unsubscribe (symbol: SymbolInfo, period: Period): void
+  unsubscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void
 }
 ```
 

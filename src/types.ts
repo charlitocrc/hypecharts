@@ -101,7 +101,8 @@ export interface Datafeed {
   /** Week bars must open Monday 00:00 UTC and month bars on the 1st at 00:00 UTC. */
   getHistoryKLineData (symbol: SymbolInfo, period: Period, from: number, to: number): Promise<KLineData[]>
   subscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void
-  unsubscribe (symbol: SymbolInfo, period: Period): void
+  /** Removes only this listener: a symbol and period can have several at once. */
+  unsubscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void
   /** Chart capabilities: exchange list, filters, period fallback, search availability. Called once per chart lifetime. */
   config? (): Promise<DatafeedConfiguration>
   searchSymbols? (query: string, filters?: SymbolSearchFilters): Promise<SymbolSearchResult[]>

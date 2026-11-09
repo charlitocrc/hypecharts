@@ -109,7 +109,8 @@ describe('createAggregatingDatafeed — live', () => {
     const base = recordedFeed({ intervals: [MINUTE] })
     const feed = createAggregatingDatafeed(base, { customPeriods: [THREE_M] })
     const received: KLineData[] = []
-    feed.subscribe(SYMBOL, THREE_M, bar => received.push(bar))
+    const listener = (bar: KLineData): void => { received.push(bar) }
+    feed.subscribe(SYMBOL, THREE_M, listener)
     // Exactly one base subscription, for the base period, not the target.
     expect([...base.subs.keys()]).toEqual(['BTC|1m'])
     const t0 = Date.UTC(2023, 10, 14, 22, 0)
@@ -123,7 +124,7 @@ describe('createAggregatingDatafeed — live', () => {
     expect(received[2].close).toBe(source[2].close)
     expect(received[2].volume).toBe(15)
     expect(received[3].open).toBe(source[3].open)
-    feed.unsubscribe(SYMBOL, THREE_M)
+    feed.unsubscribe(SYMBOL, THREE_M, listener)
     expect(base.subs.size).toBe(0)
   })
 
@@ -189,25 +190,60 @@ describe('createAggregatingDatafeed — live', () => {
     const feed = createAggregatingDatafeed(base, { customPeriods: [THREE_M] })
     const native: number[] = []
     const built: number[] = []
-    feed.subscribe(SYMBOL, MINUTE, bar => native.push(bar.timestamp))
-    feed.subscribe(SYMBOL, THREE_M, bar => built.push(bar.timestamp))
+    const onNative = (bar: KLineData): void => { native.push(bar.timestamp) }
+    const onBuilt = (bar: KLineData): void => { built.push(bar.timestamp) }
+    feed.subscribe(SYMBOL, MINUTE, onNative)
+    feed.subscribe(SYMBOL, THREE_M, onBuilt)
     const t0 = Date.UTC(2023, 10, 14, 22, 0)
     base.emit(MINUTE, minuteBars(t0, 1)[0])
     expect(native).toEqual([t0])
     expect(built).toEqual([t0])
-    feed.unsubscribe(SYMBOL, MINUTE)
+    feed.unsubscribe(SYMBOL, MINUTE, onNative)
     expect(base.subs.size).toBe(1) // the built target still needs it
-    feed.unsubscribe(SYMBOL, THREE_M)
+    feed.unsubscribe(SYMBOL, THREE_M, onBuilt)
     expect(base.subs.size).toBe(0)
+  })
+
+  for (const [label, period] of [['native', MINUTE], ['built', THREE_M]] as const) {
+    it(`keeps every ${label} listener on one market and timeframe`, () => {
+      const base = recordedFeed({ intervals: [MINUTE] })
+      const feed = createAggregatingDatafeed(base, { customPeriods: [THREE_M] })
+      const study: number[] = []
+      const chart: number[] = []
+      const onStudy = (bar: KLineData): void => { study.push(bar.timestamp) }
+      const onChart = (bar: KLineData): void => { chart.push(bar.timestamp) }
+      feed.subscribe(SYMBOL, period, onStudy)
+      feed.subscribe(SYMBOL, period, onChart)
+      const t0 = Date.UTC(2023, 10, 14, 22, 0)
+      base.emit(MINUTE, minuteBars(t0, 1)[0])
+      expect(study).toEqual([t0])
+      expect(chart).toEqual([t0])
+      feed.unsubscribe(SYMBOL, period, onStudy) // the study subscribed first and leaves first
+      expect(base.subs.size).toBe(1)
+      base.emit(MINUTE, minuteBars(t0 + 60_000, 1)[0])
+      expect(study).toEqual([t0])
+      expect(chart).toHaveLength(2)
+      feed.unsubscribe(SYMBOL, period, onChart)
+      expect(base.subs.size).toBe(0)
+    })
+  }
+
+  it('ignores an unsubscribe for a listener it does not hold', () => {
+    const base = recordedFeed({ intervals: [MINUTE] })
+    const feed = createAggregatingDatafeed(base)
+    feed.subscribe(SYMBOL, MINUTE, () => {})
+    feed.unsubscribe(SYMBOL, MINUTE, () => {})
+    expect(base.subs.size).toBe(1)
   })
 
   it('releases a subscription forwarded because nothing could build it', async () => {
     const base = recordedFeed({ intervals: [THREE_M] })
     const feed = createAggregatingDatafeed(base, { customPeriods: [MINUTE] })
     await feed.config()
-    feed.subscribe(SYMBOL, MINUTE, () => {})
+    const listener = (): void => {}
+    feed.subscribe(SYMBOL, MINUTE, listener)
     expect([...base.subs.keys()]).toEqual(['BTC|1m'])
-    feed.unsubscribe(SYMBOL, MINUTE)
+    feed.unsubscribe(SYMBOL, MINUTE, listener)
     expect(base.subs.size).toBe(0)
   })
 
@@ -216,9 +252,10 @@ describe('createAggregatingDatafeed — live', () => {
     const TEN_M: Period = { multiplier: 10, timespan: 'minute', text: '10m' }
     const base = recordedFeed({ intervals: [MINUTE, FIVE_M] })
     const feed = createAggregatingDatafeed(base, { customPeriods: [TEN_M] })
-    feed.subscribe(SYMBOL, TEN_M, () => {}) // config not loaded: falls back to 1m
+    const listener = (): void => {}
+    feed.subscribe(SYMBOL, TEN_M, listener) // config not loaded: falls back to 1m
     await feed.config()
-    feed.unsubscribe(SYMBOL, TEN_M)
+    feed.unsubscribe(SYMBOL, TEN_M, listener)
     expect(base.subs.size).toBe(0)
   })
 

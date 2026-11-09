@@ -156,7 +156,7 @@ const BASE_PRICES: Record<string, number> = {
 export class SyntheticDatafeed implements Datafeed {
   private series = new Map<string, SyntheticSeries>()
   private timers = new Map<string, ReturnType<typeof setInterval>>()
-  private subs = new Map<string, DatafeedSubscribeCallback>()
+  private subs = new Map<string, Set<DatafeedSubscribeCallback>>()
 
   private ensure (symbol: SymbolInfo, period: Period): SyntheticSeries {
     const key = `${symbol.ticker}|${period.text}`
@@ -206,7 +206,9 @@ export class SyntheticDatafeed implements Datafeed {
   subscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void {
     const key = `${symbol.ticker}|${period.text}`
     const entry = this.ensure(symbol, period)
-    this.subs.set(key, callback)
+    const listeners = this.subs.get(key) ?? new Set()
+    listeners.add(callback)
+    this.subs.set(key, listeners)
     if (this.timers.has(key)) return
     const timer = setInterval(() => {
       const last = entry.bars[entry.bars.length - 1]
@@ -227,13 +229,15 @@ export class SyntheticDatafeed implements Datafeed {
         last.low = Math.min(last.low, last.close)
         last.volume = (last.volume ?? 0) + entry.rng() * 4
       }
-      this.subs.get(key)?.({ ...entry.bars[entry.bars.length - 1] })
+      listeners.forEach(listener => { listener({ ...entry.bars[entry.bars.length - 1] }) })
     }, 400)
     this.timers.set(key, timer)
   }
 
-  unsubscribe (symbol: SymbolInfo, period: Period): void {
+  unsubscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void {
     const key = `${symbol.ticker}|${period.text}`
+    const listeners = this.subs.get(key)
+    if (listeners?.delete(callback) !== true || listeners.size > 0) return
     this.subs.delete(key)
     const timer = this.timers.get(key)
     if (timer) {

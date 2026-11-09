@@ -126,3 +126,45 @@ describe('binance history paging', () => {
     expect(urls[1]).toContain(`startTime=${499 * 60_000 + 1}`)
   })
 })
+
+describe('binance listeners', () => {
+  const SYMBOL = { ticker: 'BTCUSDT', exchange: 'BINANCE', pricePrecision: 2, volumePrecision: 3 }
+  const FOUR_HOURS = { multiplier: 4, timespan: 'hour', text: '4h' }
+
+  class FakeSocket {
+    static OPEN = 1
+    static all: FakeSocket[] = []
+    readyState = 1
+    onmessage?: (event: { data: string }) => void
+    onclose?: (() => void) | null
+    constructor () { FakeSocket.all.push(this) }
+    close (): void { this.readyState = 3 }
+    kline (t: number): void {
+      this.onmessage?.({ data: JSON.stringify({ e: 'kline', k: { t, o: '1', h: '2', l: '1', c: '2', v: '3' } }) })
+    }
+  }
+
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('shares one socket and closes it after the last listener leaves', () => {
+    FakeSocket.all = []
+    vi.stubGlobal('WebSocket', FakeSocket)
+    const feed = new BinanceDatafeed('spot')
+    const study: number[] = []
+    const chart: number[] = []
+    const onStudy = (bar: { timestamp: number }): void => { study.push(bar.timestamp) }
+    const onChart = (bar: { timestamp: number }): void => { chart.push(bar.timestamp) }
+    feed.subscribe(SYMBOL, FOUR_HOURS, onStudy)
+    feed.subscribe(SYMBOL, FOUR_HOURS, onChart)
+    expect(FakeSocket.all).toHaveLength(1)
+    const socket = FakeSocket.all[0]
+    socket.kline(1)
+    feed.unsubscribe(SYMBOL, FOUR_HOURS, onStudy)
+    socket.kline(2)
+    expect(study).toEqual([1])
+    expect(chart).toEqual([1, 2])
+    expect(socket.readyState).toBe(1)
+    feed.unsubscribe(SYMBOL, FOUR_HOURS, onChart)
+    expect(socket.readyState).toBe(3)
+  })
+})

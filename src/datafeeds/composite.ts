@@ -78,8 +78,8 @@ export function createCompositeDatafeed (routes: CompositeRoute[] = []): Composi
       routedFeed(symbol).subscribe(symbol, period, callback)
     },
 
-    unsubscribe (symbol: SymbolInfo, period: Period): void {
-      routedFeed(symbol).unsubscribe(symbol, period)
+    unsubscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void {
+      routedFeed(symbol).unsubscribe(symbol, period, callback)
     },
 
     async config (): Promise<DatafeedConfiguration> {

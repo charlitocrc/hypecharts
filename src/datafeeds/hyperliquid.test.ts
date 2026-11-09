@@ -137,17 +137,39 @@ describe('hyperliquid calendar periods', () => {
     await feed.config()
     const daily: number[] = []
     const weekly: number[] = []
-    feed.subscribe(SYMBOL, DAY, bar => daily.push(bar.timestamp))
+    const onDaily = (bar: { timestamp: number }): void => { daily.push(bar.timestamp) }
+    const onWeekly = (bar: { timestamp: number }): void => { weekly.push(bar.timestamp) }
+    feed.subscribe(SYMBOL, DAY, onDaily)
     const socket = FakeSocket.last
-    feed.subscribe(SYMBOL, WEEK, bar => weekly.push(bar.timestamp))
+    feed.subscribe(SYMBOL, WEEK, onWeekly)
     expect(socket.sent).toHaveLength(0) // onopen sends it; no duplicate venue subscribe
     const tuesday = Date.UTC(2024, 0, 9)
     socket.candle(tuesday, 1)
     expect(daily).toEqual([tuesday])
     expect(weekly).toEqual([Date.UTC(2024, 0, 8)])
-    feed.unsubscribe(SYMBOL, DAY)
+    feed.unsubscribe(SYMBOL, DAY, onDaily)
     expect(socket.sent).toHaveLength(0) // the weekly study still needs it
-    feed.unsubscribe(SYMBOL, WEEK)
+    feed.unsubscribe(SYMBOL, WEEK, onWeekly)
     expect(socket.sent.map(message => message.method)).toEqual(['unsubscribe'])
+  })
+
+  it('keeps both listeners on one market and timeframe', async () => {
+    vi.stubGlobal('WebSocket', FakeSocket)
+    const feed = new HyperliquidDatafeed()
+    await feed.config()
+    const study: number[] = []
+    const chart: number[] = []
+    const onStudy = (bar: { timestamp: number }): void => { study.push(bar.timestamp) }
+    const onChart = (bar: { timestamp: number }): void => { chart.push(bar.timestamp) }
+    feed.subscribe(SYMBOL, DAY, onStudy)
+    feed.subscribe(SYMBOL, DAY, onChart)
+    const socket = FakeSocket.last
+    const monday = Date.UTC(2024, 0, 8)
+    socket.candle(monday, 1)
+    feed.unsubscribe(SYMBOL, DAY, onStudy)
+    socket.candle(monday + 86_400_000, 1)
+    expect(study).toEqual([monday])
+    expect(chart).toEqual([monday, monday + 86_400_000])
+    expect(socket.sent).toHaveLength(0) // the chart still needs the venue stream
   })
 })

@@ -87,7 +87,7 @@ describe('composite datafeed routing', () => {
     const composite = createCompositeDatafeed([ROUTE_A, ROUTE_B])
     const symbol = { ticker: 'BTC', exchange: 'HYPERLIQUID' }
     expect(() => composite.subscribe(symbol, PERIOD, () => {})).not.toThrow()
-    expect(() => composite.unsubscribe(symbol, PERIOD)).not.toThrow()
+    expect(() => composite.unsubscribe(symbol, PERIOD, () => {})).not.toThrow()
     expect(() => composite.subscribe({ ticker: 'X', exchange: 'OKX' }, PERIOD, () => {})).toThrow()
   })
 })

@@ -75,7 +75,7 @@ import type { AggregatingDatafeed } from './datafeeds/aggregate'
 
 import i18n from './i18n'
 
-import { SymbolInfo, Period, ChartProOptions, ChartPro, DatafeedConfiguration, SymbolResolveError, SymbolSearchResult } from './types'
+import { SymbolInfo, Period, ChartProOptions, ChartPro, DatafeedConfiguration, DatafeedSubscribeCallback, SymbolResolveError, SymbolSearchResult } from './types'
 
 export interface ChartProComponentProps extends Required<Omit<ChartProOptions, 'container' | 'onSymbolResolveError'>> {
   ref: (chart: ChartPro) => void
@@ -92,6 +92,10 @@ interface ChartSnapshot {
 interface PrevSymbolPeriod {
   symbol: SymbolInfo
   period: Period
+}
+
+interface FeedSubscription extends PrevSymbolPeriod {
+  callback: DatafeedSubscribeCallback
 }
 
 function createIndicator (
@@ -203,6 +207,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
 
   let loadingMore = false
   let reqId = 0
+  let disposed = false
   let unbindShortcuts: Nullable<() => void> = null
 
   const [theme, setTheme] = createSignal(props.theme)
@@ -331,7 +336,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   // array aligned with the chart data; we own fetching/subscribing the HTF
   // series and mapping its buckets onto chart bars.
   const htfSeries = new Map<string, KLineData[]>()
-  const htfSubs = new Map<string, { period: Period, symbol: SymbolInfo }>()
+  const htfSubs = new Map<string, FeedSubscription>()
 
   const periodForTimeframe = (tf: string): Period | undefined =>
     props.periods.find(period => period.text === tf)
@@ -345,17 +350,18 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       bars = await props.datafeed.getHistoryKLineData(untrack(symbol), period, from, to)
       htfSeries.set(key, bars)
     }
-    if (!htfSubs.has(key)) {
+    if (!htfSubs.has(key) && !disposed) {
       const subSymbol = untrack(symbol)
-      htfSubs.set(key, { period, symbol: subSymbol })
-      props.datafeed.subscribe(subSymbol, period, bar => {
+      const callback: DatafeedSubscribeCallback = bar => {
         const current = htfSeries.get(key)
         if (current === undefined || current.length === 0) return
         const last = current[current.length - 1]
         if (bar.timestamp === last.timestamp) current[current.length - 1] = bar
         else if (bar.timestamp > last.timestamp) current.push(bar)
         void refreshHtfIndicators()
-      })
+      }
+      htfSubs.set(key, { period, symbol: subSymbol, callback })
+      props.datafeed.subscribe(subSymbol, period, callback)
     }
     return bars
   }
@@ -394,7 +400,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     Object.entries(subIndicators()).forEach(([name, paneId]) => scan(name, paneId))
     ;[...htfSubs.entries()].forEach(([key, sub]) => {
       if (!used.has(key)) {
-        props.datafeed.unsubscribe(sub.symbol, sub.period)
+        props.datafeed.unsubscribe(sub.symbol, sub.period, sub.callback)
         htfSubs.delete(key)
         htfSeries.delete(key)
       }
@@ -407,7 +413,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   // timestamps, normalizes it (pinned to the main series' first close) and
   // swaps extendData + recalcs. See docs/m5-compare.md.
   const compareBars = new Map<string, KLineData[]>()
-  const compareSubs = new Map<string, { symbol: SymbolInfo, period: Period }>()
+  const compareSubs = new Map<string, FeedSubscription>()
   // Compare trades stream at trade frequency; each refresh re-aligns the whole
   // series and recalculates the instance, so live refreshes are coalesced to
   // the same cadence as the main line's realtime updates.
@@ -488,7 +494,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       bars = []
       compareBars.set(key, bars)
     }
-    if (!compareSubs.has(key)) {
+    if (!compareSubs.has(key) && !disposed) {
       const subSymbol: SymbolInfo = {
         ticker: target.ticker,
         exchange: target.exchange,
@@ -496,8 +502,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         shortName: target.shortName,
         name: target.name
       }
-      compareSubs.set(key, { symbol: subSymbol, period })
-      props.datafeed.subscribe(subSymbol, period, bar => {
+      const callback: DatafeedSubscribeCallback = bar => {
         const current = compareBars.get(key)
         if (current === undefined) return
         const last = current[current.length - 1]
@@ -507,7 +512,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         else if (bar.timestamp === last.timestamp) current[current.length - 1] = bar
         else return
         scheduleCompareRefresh()
-      })
+      }
+      compareSubs.set(key, { symbol: subSymbol, period, callback })
+      props.datafeed.subscribe(subSymbol, period, callback)
     }
     // Backfill history once per key, merged into whatever live bars have
     // accumulated (deduped by timestamp). A failed backfill is retried on a
@@ -573,7 +580,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     compareTargets().forEach(({ target }) => used.add(`${symbolKey(target)}|${untrack(period).text}`))
     ;[...compareSubs.entries()].forEach(([key, sub]) => {
       if (!used.has(key)) {
-        props.datafeed.unsubscribe(sub.symbol, sub.period)
+        props.datafeed.unsubscribe(sub.symbol, sub.period, sub.callback)
         compareSubs.delete(key)
         compareBars.delete(key)
         compareHistoryDone.delete(key)
@@ -2201,6 +2208,15 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     // treats the truthy element as the registry id, so the lookup always misses.
     // Disposing the chart instance takes the `instanceof ChartImp` path.
     if (widget !== null) dispose(widget)
+    // A shared feed outlives this chart; requests still in flight must not subscribe.
+    disposed = true
+    reqId++
+    releaseMainSubscription()
+    ;[...htfSubs.values(), ...compareSubs.values()].forEach(sub => {
+      props.datafeed.unsubscribe(sub.symbol, sub.period, sub.callback)
+    })
+    htfSubs.clear()
+    compareSubs.clear()
   })
 
   createEffect(() => {
@@ -2285,10 +2301,15 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     void refreshCompares().then(() => { pruneCompareState() })
   })
 
+  let mainSubscription: FeedSubscription | null = null
+  const releaseMainSubscription = (): void => {
+    if (mainSubscription === null) return
+    props.datafeed.unsubscribe(mainSubscription.symbol, mainSubscription.period, mainSubscription.callback)
+    mainSubscription = null
+  }
+
   createEffect((prev?: PrevSymbolPeriod) => {
-    if (prev) {
-      props.datafeed.unsubscribe(prev.symbol, prev.period)
-    }
+    releaseMainSubscription()
     const s = symbol()
     const p = period()
     // DRAW-007: drawings restricted to specific timeframes hide on other periods.
@@ -2321,10 +2342,12 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         }
         void refreshHtfIndicators()
         void refreshCompares()
-        props.datafeed.subscribe(s, p, data => {
+        const callback: DatafeedSubscribeCallback = data => {
           applyRealtimeBar(data)
           refreshDataDrawings()
-        })
+        }
+        mainSubscription = { symbol: s, period: p, callback }
+        props.datafeed.subscribe(s, p, callback)
         setDataState(kLineDataList.length > 0 ? 'ok' : 'empty')
       } catch (e) {
         if (id !== reqId) {

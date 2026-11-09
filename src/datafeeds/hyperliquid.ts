@@ -149,28 +149,17 @@ function subKey (symbol: SymbolInfo, period: Period): string {
 
 export class HyperliquidDatafeed implements Datafeed {
   private ws: WebSocket | null = null
-  private subs = new Map<string, DatafeedSubscribeCallback>()
+  private subs = new Map<string, Set<DatafeedSubscribeCallback>>()
   private builders = new Map<string, TradeBarBuilder>()
   private pingTimer: ReturnType<typeof setInterval> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private destroyed = false
   private universe: Promise<HlMetaAsset[]> | null = null
-  /** The calendar builder's 1d streams, kept apart so a chart can also stream 1d. */
-  private calendarStreams = new Map<string, DatafeedSubscribeCallback>()
   /** Native 1w opens Thursday and 1M every 30 days, so both are rebuilt from 1d. */
   private calendar = createAggregatingDatafeed({
     getHistoryKLineData: (symbol, period, from, to) => this.getCandles(symbol, period, from, to),
-    subscribe: (symbol, period, callback) => {
-      const key = subKey(symbol, period)
-      const streaming = this.streamKeys().has(key)
-      this.calendarStreams.set(key, callback)
-      if (!streaming) this.openStream(key)
-    },
-    unsubscribe: (symbol, period) => {
-      const key = subKey(symbol, period)
-      this.calendarStreams.delete(key)
-      this.closeStream(key)
-    },
+    subscribe: (symbol, period, callback) => { this.addListener(subKey(symbol, period), callback) },
+    unsubscribe: (symbol, period, callback) => { this.removeListener(subKey(symbol, period), callback) },
     config: async () => ({ exchanges: [], intervals: [{ multiplier: 1, timespan: 'day', text: '1d' }] })
   })
 
@@ -299,28 +288,24 @@ export class HyperliquidDatafeed implements Datafeed {
       this.calendar.subscribe(symbol, period, callback)
       return
     }
-    const key = subKey(symbol, period)
-    const streaming = this.streamKeys().has(key)
-    this.subs.set(key, callback)
-    if (!streaming) this.openStream(key)
+    this.addListener(subKey(symbol, period), callback)
   }
 
-  unsubscribe (symbol: SymbolInfo, period: Period): void {
+  unsubscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void {
     if (isCalendar(period)) {
-      this.calendar.unsubscribe(symbol, period)
+      this.calendar.unsubscribe(symbol, period, callback)
       return
     }
-    const key = subKey(symbol, period)
-    this.subs.delete(key)
-    this.builders.delete(key)
-    this.closeStream(key)
+    this.removeListener(subKey(symbol, period), callback)
   }
 
-  private streamKeys (): Set<string> {
-    return new Set([...this.subs.keys(), ...this.calendarStreams.keys()])
-  }
-
-  private openStream (key: string): void {
+  private addListener (key: string, callback: DatafeedSubscribeCallback): void {
+    const listeners = this.subs.get(key)
+    if (listeners !== undefined) {
+      listeners.add(callback)
+      return
+    }
+    this.subs.set(key, new Set([callback]))
     if (this.ws?.readyState !== WebSocket.OPEN) {
       this.connect()
       return
@@ -330,13 +315,16 @@ export class HyperliquidDatafeed implements Datafeed {
   }
 
   /** Drop the venue stream once nothing listens to `key`; close the socket once idle. */
-  private closeStream (key: string): void {
-    const keys = this.streamKeys()
-    if (!keys.has(key) && this.ws?.readyState === WebSocket.OPEN) {
+  private removeListener (key: string, callback: DatafeedSubscribeCallback): void {
+    const listeners = this.subs.get(key)
+    if (listeners?.delete(callback) !== true || listeners.size > 0) return
+    this.subs.delete(key)
+    this.builders.delete(key)
+    if (this.ws?.readyState === WebSocket.OPEN) {
       const [coin, interval] = key.split('|')
       this.ws.send(JSON.stringify({ method: 'unsubscribe', subscription: hlSubscription(coin, interval) }))
     }
-    if (keys.size === 0) this.closeWs()
+    if (this.subs.size === 0) this.closeWs()
   }
 
   destroy (): void {
@@ -344,7 +332,6 @@ export class HyperliquidDatafeed implements Datafeed {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     if (this.pingTimer) clearInterval(this.pingTimer)
     this.subs.clear()
-    this.calendarStreams.clear()
     this.builders.clear()
     this.closeWs()
   }
@@ -357,7 +344,7 @@ export class HyperliquidDatafeed implements Datafeed {
 
     ws.onopen = () => {
       this.startPing()
-      this.streamKeys().forEach(key => {
+      this.subs.forEach((_listeners, key) => {
         const [coin, interval] = key.split('|')
         ws.send(JSON.stringify({ method: 'subscribe', subscription: hlSubscription(coin, interval) }))
       })
@@ -372,10 +359,10 @@ export class HyperliquidDatafeed implements Datafeed {
           if (!trade) continue
           const key = `${row?.coin}|1s`
           const builder = this.builders.get(key) ?? this.builders.set(key, new TradeBarBuilder()).get(key)
-          const callback = this.subs.get(key)
-          if (!builder || !callback) continue
+          const listeners = this.subs.get(key)
+          if (!builder || !listeners) continue
           const bar = builder.push(trade)
-          if (bar) callback(bar)
+          if (bar) listeners.forEach(listener => { listener({ ...bar }) })
         }
         return
       }
@@ -390,13 +377,12 @@ export class HyperliquidDatafeed implements Datafeed {
         close: Number(d.c),
         volume: Number(d.v)
       }
-      this.subs.get(key)?.(bar)
-      this.calendarStreams.get(key)?.({ ...bar })
+      this.subs.get(key)?.forEach(listener => { listener({ ...bar }) })
     }
 
     ws.onclose = () => {
       this.stopPing()
-      if (this.destroyed || this.streamKeys().size === 0) return
+      if (this.destroyed || this.subs.size === 0) return
       this.reconnectTimer = setTimeout(() => this.connect(), 2000)
     }
   }
