@@ -41,9 +41,18 @@ new KLineChartPro({
 
 ### Contributing
 
-Bug reports, integration reports and PRs welcome — see
-[CONTRIBUTING.md](CONTRIBUTING.md) for setup, commands, conventions and the benchmark
-harnesses.
+Bug reports, integration reports and PRs welcome. Use the setup and commands above, and
+[benchmarks/README.md](benchmarks/README.md) for behavior and performance harnesses.
+
+## Features and roadmap
+
+The current menus expose **156 indicators, 59 drawing tools and 13 chart styles**.
+See the [feature report](feature-parity.md) for implementation evidence and remaining acceptance
+criteria, the [roadmap](docs/roadmap.md) for the next-work queue, and the
+[API reference](docs/site/en-US/api.md) for datafeeds, custom intervals and synchronized grids.
+The maintained ledger is `feature-parity.json`; regenerate with
+`node scripts/parity-report.mjs` and verify with `node scripts/parity-report.mjs --check`.
+Menu inventory does not establish numerical or rendering equivalence with TradingView.
 
 ## Building an exchange integration
 

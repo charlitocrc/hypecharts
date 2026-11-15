@@ -34,7 +34,7 @@ import {
 import { POSITION_TOOLS, PositionSide, getPositionCoordinates } from './extension/position'
 import { TEXT_TOOLS, getText } from './extension/annotation'
 import { FREEHAND_TOOLS, shouldSample } from './extension/brush'
-import { DATA_DRAWING_TOOLS, buildDerivedDrawingData } from './extension/derived'
+import { DATA_DRAWING_TOOLS, buildDerivedDrawingData, volumeProfileData } from './extension/derived'
 import {
   ChartType, divergenceIndex, heikinAshi, heikinAshiBar, isBrickType, isLineLockedPeriod, isSynthetic, nativeCandleType, renkoBoxSize, resolveChartTypeForPeriod, transformBars
 } from './chartType'
@@ -63,6 +63,8 @@ import {
 import { parseSymbolName, qualifiedSymbolName, snapPeriod, effectivePeriods as intersectPeriods, periodDurationMs } from './symbolSelect'
 import GoToDateModal from './widget/go-to-date-modal'
 import IntervalBuilderModal from './widget/interval-builder-modal'
+import { ProfileHistory, profileDetailPeriod, profileSource, type ProfileSource } from './profileData'
+import { UTC_DAY } from './volumeProfile'
 import { mapHtfBuckets } from './indicator/timeframe'
 import { compareTooltipValues } from './indicator/compare'
 import type { CompareMode } from './compare'
@@ -329,6 +331,135 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     // reads in sync with the click.
     writeSymbolPeriod(symbolKey(untrack(symbol)), next.text)
     setPeriod(next)
+  }
+
+  // DATA-004: chart-owned, transient detail cache; never persisted or snapshotted.
+  const profileHistory = new ProfileHistory()
+  let currentProfileSource: ProfileSource | undefined
+  let profileTimer: ReturnType<typeof setTimeout> | null = null
+  let profileEpoch = 0
+  let profileDataset = ''
+  let profileJobKey = ''
+  let profileDetailBars: KLineData[] = []
+  let profilePending = false
+  let lastProfileBuild: { key: string, detail: KLineData[], source: ProfileSource } | undefined
+  const publishedProfiles = new WeakMap<Indicator, { source: ProfileSource, unsupported: boolean }>()
+
+  const profileInstances = (): Array<{ name: string, paneId: string, indicator: Indicator }> => {
+    const out: Array<{ name: string, paneId: string, indicator: Indicator }> = []
+    const add = (name: string, paneId: string): void => {
+      if (!['VRVP', 'SVP'].includes(indicatorType(name))) return
+      const indicator = widget?.getIndicatorByPaneId(paneId, name) as Nullable<Indicator>
+      if (indicator?.visible) out.push({ name, paneId, indicator })
+    }
+    mainIndicators().forEach(name => add(name, 'candle_pane'))
+    Object.entries(subIndicators()).forEach(([name, paneId]) => add(name, paneId))
+    return out
+  }
+
+  const publishProfileSource = (source: ProfileSource): void => {
+    const changed = currentProfileSource !== source
+    currentProfileSource = source
+    profileInstances().forEach(({ name, paneId, indicator }) => {
+      const unsupported = isBrickType(untrack(candleType)) ||
+        (indicatorType(name) === 'SVP' && periodDurationMs(untrack(period)) > UTC_DAY)
+      const previous = publishedProfiles.get(indicator)
+      if (previous?.source === source && previous.unsupported === unsupported) return
+      publishedProfiles.set(indicator, { source, unsupported })
+      widget?.overrideIndicator({ name, extendData: { ...indicator.extendData, volumeProfile: { ...source, unsupported } } }, paneId)
+    })
+    if (changed) refreshDataDrawings(false)
+  }
+
+  const refreshProfiles = async (): Promise<void> => {
+    profileTimer = null
+    const chart = widget
+    if (!chart || disposed || loadingVisible() || rawData.length === 0) return
+    const allInstances = profileInstances()
+    const instances = allInstances.filter(({ name }) => !isBrickType(untrack(candleType)) &&
+      !(indicatorType(name) === 'SVP' && periodDurationMs(untrack(period)) > UTC_DAY))
+    const drawings = [...dataDrawingIds].map(id => chart.getOverlayById(id))
+      .filter(overlay => overlay?.name === 'fixedRangeVolumeProfile' && overlay.visible && !isBrickType(untrack(candleType)))
+    if (!instances.length && !drawings.length) {
+      profileEpoch++
+      profileHistory.cancelPending()
+      profileJobKey = ''
+      profileDetailBars = []
+      profilePending = false
+      if (allInstances.length) publishProfileSource({ ...profileSource(rawData, untrack(period), []), unsupported: true })
+      else currentProfileSource = undefined
+      return
+    }
+    const currentSymbol = untrack(symbol)
+    const parent = untrack(period)
+    const dataset = `${symbolKey(currentSymbol)}|${parent.multiplier}${parent.timespan}`
+    if (profileDataset !== dataset) {
+      profileDataset = dataset
+      profileHistory.reset()
+      currentProfileSource = undefined
+      profileJobKey = ''
+      profileDetailBars = []
+      profilePending = false
+    }
+    const dataRequest = reqId
+    const raw = rawData.slice()
+    const visible = chart.getVisibleRange()
+    let from = instances.length ? Math.max(0, Math.min(raw.length - 1, Math.floor(visible.from))) : raw.length - 1
+    let to = instances.length ? Math.max(from, Math.min(raw.length - 1, Math.ceil(visible.to) - 1)) : 0
+    if (instances.some(({ name }) => indicatorType(name) === 'SVP')) {
+      const day = (index: number): number => Math.floor(raw[index].timestamp / UTC_DAY)
+      while (from > 0 && day(from - 1) === day(from)) from--
+      while (to + 1 < raw.length && day(to + 1) === day(to)) to++
+    }
+    for (const drawing of drawings) {
+      for (const point of drawing!.points) {
+        const index = point.timestamp !== undefined
+          ? raw.findIndex(bar => bar.timestamp === point.timestamp) : Math.round(point.dataIndex ?? 0)
+        if (index >= 0 && index < raw.length) { from = Math.min(from, index); to = Math.max(to, index) }
+      }
+    }
+    const now = Date.now()
+    // Only closed parent candles qualify for detail. The live candle stays raw.
+    let closedTo = to
+    while (closedTo >= from && bucketEnd(raw[closedTo].timestamp, parent) > now) closedTo--
+    const left = raw[from].timestamp
+    const right = closedTo >= from ? bucketEnd(raw[closedTo].timestamp, parent) : left
+    const advertised = currentSymbol.intervals ?? untrack(feedConfig)?.intervals ?? props.periods
+    const finer = !isBrickType(untrack(candleType)) ? profileDetailPeriod(parent, advertised, left, right) : undefined
+    const jobKey = `${dataset}|${left}|${right}|${finer?.text ?? ''}`
+    const buildSource = (detail: KLineData[], state: ProfileSource['state'] = 'ready'): ProfileSource => {
+      const tail = rawData[rawData.length - 1]
+      const key = `${jobKey}:${reqId}:${rawData.length}:${rawData[0]?.timestamp}:${tail?.timestamp}:${tail?.open}:${tail?.high}:${tail?.low}:${tail?.close}:${tail?.volume}:${state}`
+      if (lastProfileBuild?.key === key && lastProfileBuild.detail === detail) return lastProfileBuild.source
+      const latest = rawData.slice()
+      const source = profileSource(latest, parent, detail, finer)
+      const quality = profileSource(latest.filter(bar => bar.timestamp >= left && bar.timestamp < bucketEnd(raw[to].timestamp, parent)), parent, detail, finer)
+      const result = { ...source, state, detailedParents: quality.detailedParents, fallbackParents: quality.fallbackParents }
+      lastProfileBuild = { key, detail, source: result }
+      return result
+    }
+    if (jobKey === profileJobKey) {
+      publishProfileSource(buildSource(profileDetailBars, profilePending ? 'loading' : finer ? 'ready' : 'unavailable'))
+      return
+    }
+    profileHistory.cancelPending()
+    profileJobKey = jobKey
+    profileDetailBars = []
+    const epoch = ++profileEpoch
+    profilePending = !!finer && right > left
+    publishProfileSource(buildSource(profileDetailBars, profilePending ? 'loading' : 'unavailable'))
+    if (!finer || right <= left) return
+    const bars = await profileHistory.load(props.datafeed, currentSymbol, finer, left, right)
+    if (disposed || dataRequest !== reqId || epoch !== profileEpoch || dataset !== profileDataset) return
+    profileDetailBars = bars
+    profilePending = false
+    publishProfileSource(buildSource(bars))
+  }
+
+  const scheduleProfiles = (): void => {
+    if (disposed || profileTimer !== null) return
+    // Throttle rather than trailing debounce: active trade streams must not starve profiles.
+    profileTimer = setTimeout(() => { void refreshProfiles() }, 160)
   }
 
   // ---- IND-002: higher-timeframe studies --------------------------------
@@ -823,6 +954,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     }
     write(indicatorsKey(ticker), indicatorLayout(true))
     if (label && ticker === activeIndicatorTicker) recordHistory(label)
+    scheduleProfiles()
   }
 
   const applyIndicatorLayout = (next: StoredIndicatorLayout): void => {
@@ -1221,13 +1353,27 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     if (!widget || !overlay || !DATA_DRAWING_TOOLS.has(overlay.name)) {
       return
     }
-    const extendData = buildDerivedDrawingData(overlay.name, widget.getDataList(), overlay.points)
+    let extendData: ReturnType<typeof buildDerivedDrawingData>
+    if (overlay.name === 'fixedRangeVolumeProfile') {
+      const times = overlay.points.map(point => point.timestamp ?? rawData[Math.round(point.dataIndex ?? 0)]?.timestamp)
+        .filter((time): time is number => typeof time === 'number')
+      const parents = rawData.filter(bar => bar.timestamp >= Math.min(...times) && bar.timestamp <= Math.max(...times))
+      const detailedTimes = new Set(currentProfileSource?.detailedTimestamps ?? [])
+      const detailed = parents.filter(bar => detailedTimes.has(bar.timestamp)).length
+      const sourceLabel = `${detailed ? `${detailed < parents.length ? 'Mixed' : 'Finer candles'} ${currentProfileSource?.period?.text ?? ''}` : 'Chart candles'} · OHLCV estimate`
+      extendData = isBrickType(untrack(candleType)) ? {} : {
+        ...volumeProfileData(rawData, overlay.points, 24, 0.7, currentProfileSource?.bars), sourceLabel
+      }
+    } else {
+      extendData = buildDerivedDrawingData(overlay.name, widget.getDataList(), overlay.points)
+    }
     if (extendData) {
       widget.overrideOverlay({ id: overlay.id, extendData })
     }
   }
 
-  const refreshDataDrawings = () => {
+  const refreshDataDrawings = (refreshProfiles = true) => {
+    if (refreshProfiles) scheduleProfiles()
     dataDrawingIds.forEach(id => {
       const overlay = widget?.getOverlayById(id)
       if (overlay) {
@@ -1308,6 +1454,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       if (widget?.getOverlayById(drawing.id)?.groupId !== DRAWING_GROUP_ID) return
       widget.overrideOverlay(drawing as OverlayCreate)
       refreshDataDrawing(widget.getOverlayById(drawing.id))
+      scheduleProfiles()
     }, historyLabel('history_edit_drawing'))
     setDrawingEditor(null)
   }
@@ -1365,6 +1512,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   const drawingEvents = {
     onPressedMoveEnd: (event: { overlay: Overlay }) => {
       refreshDataDrawing(event.overlay)
+      scheduleProfiles()
       persistDrawings()
       return false
     },
@@ -1508,6 +1656,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         }
         drawingIds.add(drawn.id)
         refreshDataDrawing(drawn)
+        scheduleProfiles()
         if (POSITION_TOOLS.has(drawn.name)) {
           placePosition(drawn)
         }
@@ -2032,6 +2181,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       const total = widget?.getDataList().length ?? 0
       if (total === 0) return
       followLive = range.to >= total - 1
+      scheduleProfiles()
     })
 
     countdownTimer = setInterval(updateBarCountdown, 500)
@@ -2179,6 +2329,10 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       countdownTimer = null
     }
     resetRealtimeQueue()
+    profileEpoch++
+    profileHistory.reset()
+    if (profileTimer !== null) clearTimeout(profileTimer)
+    profileTimer = null
     if (compareRefreshTimer !== null) {
       clearTimeout(compareRefreshTimer)
       compareRefreshTimer = null
@@ -2296,7 +2450,8 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   // with the chart data, and drop fetch/subscription state no live instance
   // references. Reacts to study layout, symbol and period changes.
   createEffect(() => {
-    void [mainIndicators(), subIndicators(), symbol(), period()]
+    void [mainIndicators(), subIndicators(), symbol(), period(), feedConfig()]
+    scheduleProfiles()
     void refreshHtfIndicators().then(() => { pruneHtfState() })
     void refreshCompares().then(() => { pruneCompareState() })
   })
@@ -2323,6 +2478,15 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     }
     retryTick()
     const id = ++reqId
+    profileEpoch++
+    profileHistory.reset()
+    profileJobKey = ''
+    profileDetailBars = []
+    profilePending = false
+    currentProfileSource = undefined
+    untrack(profileInstances).forEach(({ name, paneId, indicator }) => {
+      widget?.overrideIndicator({ name, extendData: { ...indicator.extendData, volumeProfile: undefined } }, paneId)
+    })
     resetRealtimeQueue()
     setLoadingVisible(true)
     const get = async () => {

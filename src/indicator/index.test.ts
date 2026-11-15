@@ -847,8 +847,9 @@ describe('volume profiles', () => {
     const ctx = {
       fillRect: () => {},
       beginPath: () => {},
-      moveTo: (x: number) => { lines.push([x]) },
-      lineTo: (x: number) => { lines[lines.length - 1].push(x) },
+      strokeStyle: '',
+      moveTo: (x: number) => { if (ctx.strokeStyle === '#ff9800') lines.push([x]) },
+      lineTo: (x: number) => { if (ctx.strokeStyle === '#ff9800') lines[lines.length - 1].push(x) },
       stroke: () => {}
     }
     template.draw!({

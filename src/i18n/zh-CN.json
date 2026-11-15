@@ -555,5 +555,11 @@
   "unit_hour": "小时",
   "unit_day": "天",
   "unit_week": "周",
-  "unit_month": "月"
+  "unit_month": "月",
+  "profile_volume_mode": "成交量显示",
+  "profile_total": "总量（OHLCV 估算）",
+  "profile_up_down": "上涨 / 下跌（K线方向估算）",
+  "profile_show_poc": "显示 POC",
+  "profile_show_va": "显示 VAH / VAL",
+  "profile_extend": "水平线向右延伸"
 }

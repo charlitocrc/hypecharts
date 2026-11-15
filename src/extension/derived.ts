@@ -3,6 +3,9 @@ import {
   Coordinate, KLineData, OverlayFigure, OverlayTemplate, Point, RectAttrs
 } from 'klinecharts'
 
+import { buildVolumeProfile, type ProfileRow, type VolumeProfile } from '../volumeProfile'
+export type { ProfileRow } from '../volumeProfile'
+
 const BLUE = '#2962ff'
 const GREEN = '#089981'
 const ORANGE = '#ff9800'
@@ -12,15 +15,13 @@ export const DATA_DRAWING_TOOLS = new Set([
 ])
 
 interface SeriesPoint { dataIndex: number, value: number }
-export interface ProfileRow { low: number, high: number, volume: number, valueArea: boolean, poc: boolean }
 interface ProjectedBar { dataIndex: number, open: number, high: number, low: number, close: number }
 
-export interface DerivedDrawingData {
+export interface DerivedDrawingData extends VolumeProfile {
   series?: SeriesPoint[]
   upper?: SeriesPoint[]
   lower?: SeriesPoint[]
-  profile?: ProfileRow[]
-  maxVolume?: number
+  sourceLabel?: string
   bars?: ProjectedBar[]
 }
 
@@ -101,56 +102,26 @@ export const profileRowColor = (row: ProfileRow): string =>
   row.poc ? ORANGE : row.valueArea ? 'rgba(41, 98, 255, 0.52)' : 'rgba(120, 123, 134, 0.30)'
 
 export function volumeProfileData (
-  data: KLineData[], points: Array<Partial<Point>>, rowCount = 24, valueAreaPercent = 0.7
+  data: KLineData[], points: Array<Partial<Point>>, rowCount = 24, valueAreaPercent = 0.7, sourceBars?: KLineData[]
 ): DerivedDrawingData {
   const range = selectedRange(data, points)
-  return range ? volumeProfileRange(data, range[0], range[1], rowCount, valueAreaPercent) : {}
+  if (!range) return {}
+  if (sourceBars) {
+    const from = data[range[0]].timestamp
+    const to = data[range[1] + 1]?.timestamp ?? Infinity
+    return buildVolumeProfile(sourceBars.filter(bar => bar.timestamp >= from && bar.timestamp < to), rowCount, valueAreaPercent)
+  }
+  return volumeProfileRange(data, range[0], range[1], rowCount, valueAreaPercent)
 }
 
 export function volumeProfileRange (
   data: KLineData[], start: number, end: number, rowCount = 24, valueAreaPercent = 0.7
-): { profile?: ProfileRow[], maxVolume?: number } {
-  if (start > end || start < 0 || end >= data.length) return {}
-  let low = Infinity
-  let high = -Infinity
-  for (let i = start; i <= end; i++) {
-    low = Math.min(low, data[i].low)
-    high = Math.max(high, data[i].high)
-  }
-  const rows = Math.max(1, Math.floor(rowCount))
-  const step = high === low ? Math.max(Math.abs(high) * 0.001, 1e-8) : (high - low) / rows
-  const volumes = new Array<number>(rows).fill(0)
-  for (let i = start; i <= end; i++) {
-    const bar = data[i]
-    // OHLCV candles do not reveal the exact price of every trade. Spread each
-    // candle's volume evenly across the price rows its high-low range touched;
-    // this preserves total volume and avoids a misleading single-price spike.
-    const firstBucket = Math.max(0, Math.min(rows - 1, Math.floor((bar.low - low) / step)))
-    const lastBucket = Math.max(firstBucket, Math.min(rows - 1, Math.floor((bar.high - low) / step)))
-    const share = Math.max(0, bar.volume ?? 0) / (lastBucket - firstBucket + 1)
-    for (let bucket = firstBucket; bucket <= lastBucket; bucket++) volumes[bucket] += share
-  }
-  let poc = 0
-  for (let i = 1; i < rows; i++) if (volumes[i] > volumes[poc]) poc = i
-  const total = volumes.reduce((sum, value) => sum + value, 0)
-  const target = total * Math.min(1, Math.max(0, valueAreaPercent))
-  let included = volumes[poc]
-  let areaLow = poc
-  let areaHigh = poc
-  while (included < target && (areaLow > 0 || areaHigh < rows - 1)) {
-    const below = areaLow > 0 ? volumes[areaLow - 1] : -1
-    const above = areaHigh < rows - 1 ? volumes[areaHigh + 1] : -1
-    if (above >= below) included += volumes[++areaHigh]
-    else included += volumes[--areaLow]
-  }
-  const profile = volumes.map((volume, index) => ({
-    low: low + step * index,
-    high: low + step * (index + 1),
-    volume,
-    valueArea: index >= areaLow && index <= areaHigh,
-    poc: index === poc
-  }))
-  return { profile, maxVolume: volumes[poc] }
+): VolumeProfile {
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return {}
+  const from = Math.max(0, Math.floor(start))
+  const to = Math.min(data.length - 1, Math.floor(end))
+  if (from > to) return {}
+  return buildVolumeProfile(data.slice(from, to + 1), rowCount, valueAreaPercent)
 }
 
 export function barsPatternData (data: KLineData[], points: Array<Partial<Point>>): DerivedDrawingData {
@@ -299,6 +270,11 @@ export const fixedRangeVolumeProfile: OverlayTemplate = {
       type: 'rect',
       attrs: { x: left, y: Math.min(profileTop, profileBottom), width, height: Math.abs(profileBottom - profileTop) },
       styles: { style: 'stroke', color: 'rgba(120, 123, 134, 0.55)' }
+    })
+    if (overlay.extendData?.sourceLabel) figures.push({
+      type: 'text', ignoreEvent: true,
+      attrs: { x: left + 4, y: Math.min(profileTop, profileBottom) + 12, text: overlay.extendData.sourceLabel },
+      styles: { color: '#929AA5', size: 10 }
     })
     return figures
   }

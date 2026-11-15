@@ -555,5 +555,11 @@
   "unit_hour": "Hours",
   "unit_day": "Days",
   "unit_week": "Weeks",
-  "unit_month": "Months"
+  "unit_month": "Months",
+  "profile_volume_mode": "Volume display",
+  "profile_total": "Total (OHLCV estimate)",
+  "profile_up_down": "Up / Down (candle direction estimate)",
+  "profile_show_poc": "Show POC",
+  "profile_show_va": "Show VAH / VAL",
+  "profile_extend": "Extend levels right"
 }

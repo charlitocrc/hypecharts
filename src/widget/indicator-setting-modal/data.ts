@@ -308,12 +308,20 @@ const data: Record<string, IndicatorParamConfig[]> = {
   VRVP: [
     { paramNameKey: 'row_count', precision: 0, min: 1, max: 200, default: 24 },
     { paramNameKey: 'value_area_percent', precision: 0, min: 1, max: 100, default: 70 },
-    { paramNameKey: 'width_percent', precision: 0, min: 1, max: 100, default: 30 }
+    { paramNameKey: 'width_percent', precision: 0, min: 1, max: 100, default: 30 },
+    { paramNameKey: 'profile_volume_mode', precision: 0, min: 0, max: 1, default: 0, options: ['profile_total', 'profile_up_down'] },
+    { paramNameKey: 'profile_show_poc', precision: 0, min: 0, max: 1, default: 1, options: ['pattern_off', 'pattern_on'] },
+    { paramNameKey: 'profile_show_va', precision: 0, min: 0, max: 1, default: 1, options: ['pattern_off', 'pattern_on'] },
+    { paramNameKey: 'profile_extend', precision: 0, min: 0, max: 1, default: 0, options: ['pattern_off', 'pattern_on'] }
   ],
   SVP: [
     { paramNameKey: 'row_count', precision: 0, min: 1, max: 200, default: 24 },
     { paramNameKey: 'value_area_percent', precision: 0, min: 1, max: 100, default: 70 },
-    { paramNameKey: 'width_percent', precision: 0, min: 1, max: 100, default: 70 }
+    { paramNameKey: 'width_percent', precision: 0, min: 1, max: 100, default: 70 },
+    { paramNameKey: 'profile_volume_mode', precision: 0, min: 0, max: 1, default: 0, options: ['profile_total', 'profile_up_down'] },
+    { paramNameKey: 'profile_show_poc', precision: 0, min: 0, max: 1, default: 1, options: ['pattern_off', 'pattern_on'] },
+    { paramNameKey: 'profile_show_va', precision: 0, min: 0, max: 1, default: 1, options: ['pattern_off', 'pattern_on'] },
+    { paramNameKey: 'profile_extend', precision: 0, min: 0, max: 1, default: 0, options: ['pattern_off', 'pattern_on'] }
   ],
   HV: [
     { paramNameKey: 'period', precision: 0, min: 2, default: 20 }

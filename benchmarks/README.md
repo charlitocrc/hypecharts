@@ -80,3 +80,15 @@ are stubbed; timings use localhost with no CPU/network throttling. This is a
 workflow check and one timing sample, not a live exchange benchmark.
 
 See [startup-findings.md](startup-findings.md) for the measured changes and limits.
+
+## Volume-profile workflow
+
+```sh
+npm run build
+node benchmarks/volume-profile.mjs
+# Optional installed browser override: node benchmarks/volume-profile.mjs /path/to/chrome-headless-shell
+```
+
+Checks fixture finer-candle requests, raw-data profiles, up/down canvas pixels, real settings,
+undo/redo, reload, fixed-drawing restoration, pan/zoom and symbol/period isolation. Also accepts
+PLAYWRIGHT_MODULE and PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH. No live data or reference parity claim.
