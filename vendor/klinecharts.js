@@ -5848,7 +5848,7 @@ var SeparatorWidget = /** @class */ (function (_super) {
                 reducedPane.setBounding({ height: reducedPaneHeight });
                 increasedPane.setBounding({ height: startDragIncreasedPaneHeight + diffHeight });
                 var chart = currentPane.getChart();
-                chart.getChartStore().getActionStore().execute(exports.ActionType.OnPaneDrag, { paneId: currentPane.getId });
+                chart.getChartStore().getActionStore().execute(exports.ActionType.OnPaneDrag, { paneId: currentPane.getId() });
                 chart.adjustPaneViewport(true, true, true, true, true);
             }
         }
@@ -12996,6 +12996,19 @@ var ChartEvent = /** @class */ (function () {
         var e_1, _a;
         var panes = this._chart.getAllPanes();
         var x = event.x, y = event.y;
+        // Separator hit areas straddle pane boundaries. Test them before the
+        // plot rectangles so the upper half and exact boundary remain usable.
+        var separatorPanes = Array.from(panes.values());
+        for (var separatorIndex = 0; separatorIndex < separatorPanes.length; separatorIndex++) {
+            var separatorPane = separatorPanes[separatorIndex];
+            var separator = separatorPane.getSeparatorWidget();
+            if (separator !== null) {
+                var hit = separator.getBounding();
+                if (x >= hit.left && x <= hit.left + hit.width && y >= hit.top && y <= hit.top + REAL_SEPARATOR_HEIGHT) {
+                    return { pane: separatorPane, widget: separator };
+                }
+            }
+        }
         var pane = null;
         try {
             for (var panes_1 = __values(panes), panes_1_1 = panes_1.next(); !panes_1_1.done; panes_1_1 = panes_1.next()) {
@@ -13246,6 +13259,35 @@ var ChartImp = /** @class */ (function () {
     ChartImp.prototype.getContainer = function () { return this._container; };
     ChartImp.prototype.getChartStore = function () { return this._chartStore; };
     ChartImp.prototype.getAllPanes = function () { return this._panes; };
+    ChartImp.prototype.getPaneOrder = function () {
+        return Array.from(this._panes.keys()).filter(function (id) { return id !== PaneIdConstants.CANDLE; });
+    };
+    // The price pane stays first. Reorder existing panes without recreating
+    // indicators, axes, overlays or canvas widgets. Separators follow their pane.
+    ChartImp.prototype.setPaneOrder = function (ids) {
+        var current = this.getPaneOrder();
+        if (!Array.isArray(ids) || ids.length !== current.length || new Set(ids).size !== ids.length ||
+            ids.some(function (id) { return current.indexOf(id) < 0; })) return false;
+        if (ids.every(function (id, index) { return id === current[index]; })) return false;
+        this._chartEvent.cancelViewportAnimation();
+        var panes = [this._panes.get(PaneIdConstants.CANDLE)];
+        for (var index = 0; index < ids.length; index++) panes.push(this._panes.get(ids[index]));
+        this._panes.clear();
+        for (var index = 0; index < panes.length; index++) {
+            var pane = panes[index];
+            this._panes.set(pane.getId(), pane);
+            pane.setTopPane(index > 0 ? panes[index - 1] : null);
+            pane.setBottomPane(index + 1 < panes.length ? panes[index + 1] : null);
+            if (index > 0) {
+                var separator = pane.getSeparatorWidget();
+                if (separator) this._chartContainer.insertBefore(separator.getContainer(), this._xAxisPane.getContainer());
+                this._chartContainer.insertBefore(pane.getContainer(), this._xAxisPane.getContainer());
+            }
+        }
+        this._chartStore.getCrosshairStore().set();
+        this.adjustPaneViewport(true, true, true, true, true);
+        return true;
+    };
     ChartImp.prototype.adjustPaneViewport = function (shouldMeasureHeight, shouldMeasureWidth, shouldUpdate, shouldAdjustYAxis, shouldForceAdjustYAxis) {
         if (shouldMeasureHeight) {
             this._measurePaneHeight();
@@ -13527,6 +13569,16 @@ var ChartImp = /** @class */ (function () {
     };
     ChartImp.prototype.calcInstance = function (name, paneId) {
         return this._chartStore.getIndicatorStore().calcInstance(name, paneId);
+    };
+    ChartImp.prototype.setIndicatorOrder = function (paneId, names) {
+        var instances = this._chartStore.getIndicatorStore().getInstances(paneId);
+        if (!Array.isArray(names) || names.length !== instances.size || new Set(names).size !== names.length ||
+            names.some(function (name) { return !instances.has(name); })) return false;
+        var reordered = names.map(function (name) { return instances.get(name); });
+        instances.clear();
+        reordered.forEach(function (indicator) { instances.set(indicator.name, indicator); });
+        this.updatePane(1 /* UpdateLevel.Overlay */, paneId);
+        return true;
     };
     ChartImp.prototype.getIndicatorByPaneId = function (paneId, name) {
         return this._chartStore.getIndicatorStore().getInstanceByPaneId(paneId, name);

@@ -63,6 +63,8 @@ export interface IndicatorSettingModalProps {
   /** IND-004: panes the study can move to (excluding its current one). */
   moveTargets?: Array<{ id: string, label: string }>
   onMovePane?: (targetPaneId: string) => void
+  paneOrder?: { up: boolean, down: boolean }
+  onReorderPane?: (direction: -1 | 1) => void
 }
 
 const SIZES = [1, 2, 3, 4]
@@ -161,6 +163,12 @@ const IndicatorSettingModal: Component<IndicatorSettingModalProps> = props => {
           <span class="indicator-placement">
             {i18n(props.params.paneId === 'candle_pane' ? 'indicator_on_chart' : 'indicator_new_pane', props.locale)}
           </span>
+          <Show when={props.paneOrder && props.onReorderPane}>
+            <div class="pane-order-controls">
+              <button type="button" aria-label={i18n('indicator_pane_up', props.locale)} title={i18n('indicator_pane_up', props.locale)} disabled={!props.paneOrder?.up} onClick={() => props.onReorderPane?.(-1)}>↑</button>
+              <button type="button" aria-label={i18n('indicator_pane_down', props.locale)} title={i18n('indicator_pane_down', props.locale)} disabled={!props.paneOrder?.down} onClick={() => props.onReorderPane?.(1)}>↓</button>
+            </div>
+          </Show>
           <Show when={(props.moveTargets?.length ?? 0) > 0 && props.onMovePane !== undefined}>
             <select
               class="move-pane-select"

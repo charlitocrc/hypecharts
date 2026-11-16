@@ -561,5 +561,8 @@
   "profile_up_down": "Up / Down (candle direction estimate)",
   "profile_show_poc": "Show POC",
   "profile_show_va": "Show VAH / VAL",
-  "profile_extend": "Extend levels right"
+  "profile_extend": "Extend levels right",
+  "indicator_pane_up": "Move pane up",
+  "indicator_pane_down": "Move pane down",
+  "history_reorder_pane": "Reorder panes"
 }

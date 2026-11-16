@@ -261,6 +261,8 @@ export interface StoredIndicator {
   visible?: boolean
   plots?: Record<string, PlotStyle>
   height?: number
+  /** Shared sub-pane identity; sub array order determines visual pane order. */
+  pane?: string
   /** IND-002: price source the study reads as 'close'. */
   source?: string
   /** IND-002: horizontal plot shift in bars. */
@@ -389,6 +391,7 @@ export const toStoredIndicator = (value: unknown): StoredIndicator | null => {
   if (typeof candidate.height === 'number' && candidate.height >= 30 && candidate.height <= 4000) {
     stored.height = Math.round(candidate.height)
   }
+  if (typeof candidate.pane === 'string' && /^[a-zA-Z0-9:_~-]{1,128}$/.test(candidate.pane) && !['candle_pane', 'xaxis_pane', 'x_axis_pane', '__new__'].includes(candidate.pane)) stored.pane = candidate.pane
   // IND-002 calculation inputs
   if (typeof candidate.source === 'string' && (PRICE_SOURCES as readonly string[]).includes(candidate.source) && candidate.source !== 'close') {
     stored.source = candidate.source
@@ -424,7 +427,37 @@ export function toStoredIndicatorLayout (value: unknown): StoredIndicatorLayout 
     })
     return out
   }
-  return { main: normalize(candidate.main), sub: normalize(candidate.sub) }
+  const main = normalize(candidate.main).map(({ pane, ...item }) => item)
+  const mainNames = new Set(main.map(item => item.name))
+  return { main, sub: normalize(candidate.sub).filter(item => !mainNames.has(item.name)) }
+}
+
+export interface StoredIndicatorPane {
+  id: string
+  height?: number
+  indicators: StoredIndicator[]
+}
+
+/** First occurrence orders panes. Legacy entries each keep a separate pane. */
+export function storedIndicatorPanes (items: StoredIndicator[]): StoredIndicatorPane[] {
+  const panes = new Map<string, StoredIndicatorPane>()
+  const reserved = new Set(items.map(item => item.pane).filter(Boolean))
+  items.forEach((item, index) => {
+    let id = item.pane
+    if (!id) {
+      id = `saved_pane_${index}`
+      while (reserved.has(id)) id += '_'
+      reserved.add(id)
+    }
+    let pane = panes.get(id)
+    if (!pane) {
+      pane = { id, indicators: [], ...(item.height !== undefined ? { height: item.height } : {}) }
+      panes.set(id, pane)
+    }
+    if (pane.height === undefined && item.height !== undefined) pane.height = item.height
+    pane.indicators.push({ ...item, pane: id })
+  })
+  return [...panes.values()]
 }
 
 export interface IndicatorLayoutChange {
@@ -446,7 +479,10 @@ export function indicatorLayoutChanges (current: StoredIndicatorLayout, next: St
     after.forEach((item, id) => {
       const previous = before.get(id)
       if (!previous) changes.add.push({ main, item })
-      else if (JSON.stringify(previous) !== JSON.stringify(item)) changes.update.push({ main, item })
+      else if (!main && previous.pane !== item.pane) {
+        changes.remove.push({ main, item: previous })
+        changes.add.push({ main, item })
+      } else if (JSON.stringify(previous) !== JSON.stringify(item)) changes.update.push({ main, item })
     })
   })
   return changes

@@ -875,6 +875,9 @@ export interface ConvertFinder {
 	absolute?: boolean;
 }
 export interface Chart {
+	getPaneOrder: () => string[];
+	setIndicatorOrder: (paneId: string, names: string[]) => boolean;
+	setPaneOrder: (paneIds: string[]) => boolean;
 	getDom: (paneId?: string, position?: DomPosition) => Nullable<HTMLElement>;
 	getIndicatorTitleBounds: (paneId: string) => Array<{ indicatorName: string; x: number; y: number; width: number; height: number }>;
 	getSize: (paneId?: string, position?: DomPosition) => Nullable<Bounding>;

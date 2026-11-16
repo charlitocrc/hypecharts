@@ -561,5 +561,8 @@
   "profile_up_down": "上涨 / 下跌（K线方向估算）",
   "profile_show_poc": "显示 POC",
   "profile_show_va": "显示 VAH / VAL",
-  "profile_extend": "水平线向右延伸"
+  "profile_extend": "水平线向右延伸",
+  "indicator_pane_up": "上移窗格",
+  "indicator_pane_down": "下移窗格",
+  "history_reorder_pane": "调整窗格顺序"
 }

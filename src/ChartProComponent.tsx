@@ -52,7 +52,7 @@ import { bindIndicatorDrag, canDragIndicatorToMain } from './indicatorDrag'
 import { presetToOverlayParts } from './widget/drawing-manager/model'
 
 import {
-  read, readMigrated, write, drawingsKey, indicatorsKey, indicatorLayoutChanges, indicatorType, nextIndicatorId, symbolKey,
+  read, readMigrated, write, drawingsKey, indicatorsKey, indicatorLayoutChanges, storedIndicatorPanes, indicatorType, nextIndicatorId, symbolKey,
   toStoredDrawing, toStoredIndicator, toStoredIndicatorLayout,
   readIndicatorFavorites, writeIndicatorFavorites, readIndicatorTemplates, writeIndicatorTemplates,
   readToolbarFavorites, writeToolbarFavorites, readDrawingPresets, readDefaultDrawingPresets, writeDefaultDrawingPresets,
@@ -888,7 +888,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     }
     if (!created) {
       // Creation failed — put the study back where it was instead of losing it.
-      const restored = createIndicator(chart, name, true, onMain ? { id: 'candle_pane' } : undefined, stored)
+      const restored = createIndicator(chart, name, true, { id: fromPaneId, height: stored.height }, stored)
       if (onMain) setMainIndicators([...mainIndicators(), name])
       else if (restored) setSubIndicators({ ...subIndicators(), [name]: restored })
       return
@@ -897,7 +897,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       setMainIndicators([...mainIndicators(), name])
     } else {
       setSubIndicators({ ...subIndicators(), [name]: finalPaneId })
-      if (stored.height !== undefined) {
+      if (targetId === '__new__' && stored.height !== undefined) {
         chart.setPaneOptions({ id: finalPaneId, height: stored.height } as any)
       }
     }
@@ -1022,6 +1022,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       visible: indicator?.visible,
       plots: (indicator?.styles as any)?.plots,
       height: withHeight ? widget?.getSize(paneId)?.height : undefined,
+      pane: paneId !== 'candle_pane' ? paneId : undefined,
       source: (indicator as any)?.source,
       offset: (indicator as any)?.offset,
       timeframe: (indicator as any)?.timeframe,
@@ -1031,7 +1032,10 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
 
   const indicatorLayout = (withHeights = false): StoredIndicatorLayout => ({
     main: mainIndicators().map(name => snapshotIndicator(name, 'candle_pane')),
-    sub: Object.entries(subIndicators()).map(([name, paneId]) => snapshotIndicator(name, paneId, withHeights))
+    sub: (widget?.getPaneOrder() ?? []).flatMap(paneId => {
+      const names = [...((widget?.getIndicatorByPaneId(paneId) as Map<string, Indicator>)?.keys() ?? [])]
+      return names.filter(name => subIndicators()[name] === paneId).map(name => snapshotIndicator(name, paneId, withHeights))
+    })
   })
 
   const historyLabel = (key: string, name?: string): string =>
@@ -1048,7 +1052,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
 
   const applyIndicatorLayout = (next: StoredIndicatorLayout): void => {
     if (!widget) return
-    const { remove, add, update } = indicatorLayoutChanges(indicatorLayout(), next)
+    const panes = storedIndicatorPanes(next.sub)
+    next = { main: next.main, sub: panes.flatMap(pane => pane.indicators) }
+    const { remove, add, update } = indicatorLayoutChanges(indicatorLayout(true), next)
     const main = new Set(mainIndicators())
     const sub = { ...subIndicators() }
     remove.forEach(({ main: onMain, item }) => {
@@ -1058,20 +1064,43 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     })
     update.forEach(({ main: onMain, item }) => {
       widget!.overrideIndicator({
-        name: item.name, calcParams: item.calcParams, visible: item.visible, styles: { plots: item.plots ?? {} }
+        name: item.name, calcParams: item.calcParams, visible: item.visible, styles: { plots: item.plots ?? {} },
+        source: item.source ?? 'close', offset: item.offset ?? 0, timeframe: item.timeframe ?? ''
       } as any, onMain ? 'candle_pane' : sub[item.name])
     })
     add.forEach(({ main: onMain, item }) => {
       if (onMain) {
         if (createIndicator(widget, item.name, true, { id: 'candle_pane' }, item)) main.add(item.name)
       } else {
-        // ponytail: a re-added study gets a new bottom pane; restoring its old pane position needs pane reordering (IND-004)
-        const paneId = createIndicator(widget, item.name, true, undefined, item)
+        const pane = panes.find(pane => pane.id === item.pane)!
+        const paneId = createIndicator(widget, item.name, true, { id: pane.id, height: pane.height }, item)
         if (paneId) sub[item.name] = paneId
       }
     })
     setMainIndicators(next.main.map(item => item.name).filter(id => main.has(id)))
-    setSubIndicators(sub)
+    setSubIndicators(Object.fromEntries(next.sub.filter(item => sub[item.name]).map(item => [item.name, sub[item.name]])))
+    widget.setIndicatorOrder('candle_pane', next.main.map(item => item.name).filter(id => main.has(id)))
+    panes.forEach(pane => {
+      const members = pane.indicators.filter(item => sub[item.name]).map(item => item.name)
+      widget!.setIndicatorOrder(pane.id, members)
+      if (pane.height !== undefined) widget!.setPaneOptions({ id: pane.id, height: pane.height })
+    })
+    widget.setPaneOrder(panes.map(pane => pane.id).filter(id => widget!.getDom(id) !== null))
+    void refreshHtfIndicators()
+    void refreshCompares()
+  }
+
+  const reorderPane = (paneId: string, direction: -1 | 1): void => {
+    if (!widget || loadingVisible()) return
+    const order = widget.getPaneOrder()
+    const index = order.indexOf(paneId)
+    const target = index + direction
+    if (index < 0 || target < 0 || target >= order.length) return
+    ;[order[index], order[target]] = [order[target], order[index]]
+    if (widget.setPaneOrder(order)) {
+      setSubIndicators({ ...subIndicators() })
+      persistIndicators(activeIndicatorTicker, historyLabel('history_reorder_pane'))
+    }
   }
 
   const restoreIndicators = (ticker: string, legacyTicker: string): void => {
@@ -1094,9 +1123,11 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         nextMain.push(item.name)
       }
     })
-    layout.sub.forEach(item => {
-      const paneId = createIndicator(widget, item.name, true, item.height ? { height: item.height } : undefined, item)
-      if (paneId) nextSub[item.name] = paneId
+    storedIndicatorPanes(layout.sub).forEach(pane => {
+      pane.indicators.forEach(item => {
+        const paneId = createIndicator(widget, item.name, true, { id: pane.id, height: pane.height }, item)
+        if (paneId) nextSub[item.name] = paneId
+      })
     })
 
     setMainIndicators(nextMain)
@@ -1566,13 +1597,6 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         setTimezone({ key: state.settings.timezone, text: translateTimezone(state.settings.timezone, props.locale) })
       }
     }
-    // pane heights ride along in every snapshot; re-apply them after a layout travel
-    state.indicators.sub.forEach(item => {
-      const paneId = subIndicators()[item.name]
-      if (paneId !== undefined && item.height !== undefined) {
-        widget?.setPaneOptions({ id: paneId, height: item.height } as any)
-      }
-    })
     updateHistoryState()
   }
 
@@ -2917,16 +2941,26 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
             if (current.paneId !== 'candle_pane' && canDragIndicatorToMain(current.indicatorName)) {
               targets.push({ id: 'candle_pane', label: i18n('indicator_on_chart', props.locale) })
             }
-            Object.entries(subIndicators()).forEach(([name, paneId]) => {
-              // Pane ids can go stale after symbol switches (panes are
-              // re-created); only offer targets that still exist.
-              if (paneId === current.paneId || name === current.indicatorName) return
-              if ((widget as any)?.getPaneById?.(paneId) == null) return
-              targets.push({ id: paneId, label: indicatorType(name) })
+            const members = Object.entries(subIndicators())
+            ;(widget as Nullable<Chart>)?.getPaneOrder().forEach((paneId, index) => {
+              if (paneId === current.paneId) return
+              const names = members.filter(([, id]) => id === paneId).map(([name]) => indicatorType(name))
+              if (names.length > 0) targets.push({ id: paneId, label: `${index + 1}. ${names.join(' + ')}` })
             })
             targets.push({ id: '__new__', label: i18n('indicator_new_pane', props.locale) })
             return targets
           })()}
+          paneOrder={(() => {
+            subIndicators()
+            const current = indicatorSettingModalParams()
+            const order = (widget as Nullable<Chart>)?.getPaneOrder() ?? []
+            const index = order.indexOf(current.paneId)
+            return index < 0 ? undefined : { up: index > 0, down: index < order.length - 1 }
+          })()}
+          onReorderPane={direction => {
+            reorderPane(indicatorSettingModalParams().paneId, direction)
+            closeIndicatorSettings()
+          }}
           onMovePane={targetPaneId => {
             const current = indicatorSettingModalParams()
             moveIndicatorToPane(current.indicatorName, current.paneId, targetPaneId)
