@@ -177,7 +177,7 @@ export const INDICATOR_MENU_ITEMS: IndicatorMenuItem[] = [
   { name: 'CKS', category: 'volatility', placements: main, keywords: 'chande kroll stop atr bands' },
   { name: 'CHOP', category: 'volatility', placements: sub, keywords: 'choppiness index trend range' },
 
-  { name: 'VOL', category: 'volume', placements: sub, popularRank: 3, keywords: 'volume' },
+  { name: 'VOL', category: 'volume', placements: both, popularRank: 3, keywords: 'volume' },
   { name: 'VWAP', category: 'volume', placements: main, popularRank: 7, keywords: 'volume weighted average price' },
   { name: 'VRVP', category: 'volume', placements: main, keywords: 'volume profile visible range vpvr poc value area' },
   { name: 'SVP', category: 'volume', placements: main, keywords: 'session volume profile poc value area' },

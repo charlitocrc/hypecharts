@@ -8051,6 +8051,19 @@ function createOwnScaleConvertor(chartStore, pane, indicator, result) {
     if (min === Number.MAX_SAFE_INTEGER || max === Number.MIN_SAFE_INTEGER) {
         return null;
     }
+    // Ordinary volume on the price pane occupies a bottom band, with a
+    // true zero baseline. Price scale transforms must not invert this band.
+    if (pane.getId() === PaneIdConstants.CANDLE && indicator.name.split('~')[0] === 'VOL') {
+        var volumeHeight = pane.getMainWidget().getBounding().height;
+        var volumeBottom = Math.max(0, volumeHeight - 2);
+        var volumeRange = Math.max(max, 1);
+        return {
+            convert: function (value) {
+                return Math.round(volumeBottom - Math.max(0, value) / volumeRange * volumeHeight * 0.25);
+            },
+            base: 0
+        };
+    }
     if (!(max > min)) {
         var pad = Math.max(Math.abs(max) * 0.01, 1e-8);
         min -= pad;
@@ -8417,6 +8430,7 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
     }
     IndicatorTooltipView.prototype.drawImp = function (ctx) {
         var widget = this.getWidget();
+        widget.getPane()._indicatorTitleBounds = [];
         var pane = widget.getPane();
         var chartStore = pane.getChart().getChartStore();
         var crosshair = chartStore.getCrosshairStore().get();
@@ -8431,6 +8445,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
     };
     IndicatorTooltipView.prototype.drawIndicatorTooltip = function (ctx, paneId, dataList, crosshair, activeTooltipIconInfo, indicators, customApi, bounding, styles, top) {
         var _this = this;
+        var titleBounds = [];
+        this.getWidget().getPane()._indicatorTitleBounds = titleBounds;
         var tooltipStyles = styles.tooltip;
         var height = 0;
         if (this.isDrawTooltip(crosshair, tooltipStyles)) {
@@ -8455,7 +8471,9 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
                         if (calcParamsText.length > 0) {
                             text = "".concat(text).concat(calcParamsText);
                         }
-                        var _d = __read(_this.drawStandardTooltipLabels(ctx, bounding, [{ title: { text: '', color: tooltipTextStyles_1.color }, value: { text: text, color: tooltipTextStyles_1.color } }], x_1, y_1, prevRowHeight_1, tooltipTextStyles_1), 4), nameStartX = _d[0], nameStartY = _d[1], nameLastRowHeight = _d[2], nameIncreaseHeight = _d[3];
+                        var _d = __read(_this.drawStandardTooltipLabels(ctx, bounding, [{ title: { text: '', color: tooltipTextStyles_1.color }, value: { text: text, color: tooltipTextStyles_1.color } }], x_1, y_1, prevRowHeight_1, tooltipTextStyles_1, function (rect) {
+                            titleBounds.push(__assign({ indicatorName: indicator.name }, rect));
+                        }), 4), nameStartX = _d[0], nameStartY = _d[1], nameLastRowHeight = _d[2], nameIncreaseHeight = _d[3];
                         x_1 = nameStartX;
                         y_1 = nameStartY;
                         height += nameIncreaseHeight;
@@ -8530,7 +8548,7 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
         }
         return [x, y, Math.max(prevRowHeight, rowHeight), increaseHeight];
     };
-    IndicatorTooltipView.prototype.drawStandardTooltipLabels = function (ctx, bounding, labels, startX, startY, prevRowHeight, styles) {
+    IndicatorTooltipView.prototype.drawStandardTooltipLabels = function (ctx, bounding, labels, startX, startY, prevRowHeight, styles, onBounds) {
         var _this = this;
         var x = startX;
         var y = startY;
@@ -8557,6 +8575,7 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
                     x += marginLeft_1;
                     increaseHeight += Math.max(0, height - currentPrevRowHeight);
                 }
+                if (onBounds) onBounds({ x: x, y: y + marginTop_1, width: totalTextWidth, height: size_1 });
                 rowHeight = Math.max(currentPrevRowHeight, height);
                 currentPrevRowHeight = rowHeight;
                 if (title.text.length > 0) {
@@ -10244,6 +10263,8 @@ var IndicatorLastValueView = /** @class */ (function (_super) {
             var dataIndex_1 = dataList_1.length - 1;
             var indicators = chartStore.getIndicatorStore().getInstances(pane.getId());
             indicators.forEach(function (indicator) {
+                // Volume values remain in the tooltip; keep the price axis clear.
+                if (indicator.ownScale && pane.getId() === PaneIdConstants.CANDLE && indicator.name.split('~')[0] === 'VOL') return;
                 var result = indicator.result;
                 var indicatorData = result[dataIndex_1];
                 if (indicatorData !== undefined && indicator.visible) {
@@ -13310,6 +13331,13 @@ var ChartImp = /** @class */ (function () {
             return this._chartContainer;
         }
         return null;
+    };
+    // Title bounds use pane-main CSS pixels, matching the actual wrapped label.
+    ChartImp.prototype.getIndicatorTitleBounds = function (paneId) {
+        var pane = this.getPaneById(paneId);
+        if (!pane) return [];
+        var bounds = pane._indicatorTitleBounds;
+        return (bounds || []).map(function (rect) { return __assign({}, rect); });
     };
     ChartImp.prototype.getSize = function (paneId, position) {
         var _a, _b;

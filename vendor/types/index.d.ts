@@ -876,6 +876,7 @@ export interface ConvertFinder {
 }
 export interface Chart {
 	getDom: (paneId?: string, position?: DomPosition) => Nullable<HTMLElement>;
+	getIndicatorTitleBounds: (paneId: string) => Array<{ indicatorName: string; x: number; y: number; width: number; height: number }>;
 	getSize: (paneId?: string, position?: DomPosition) => Nullable<Bounding>;
 	setLocale: (locale: string) => void;
 	getLocale: () => string;

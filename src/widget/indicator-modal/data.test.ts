@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { INDICATOR_MENU_ITEMS, POPULAR_INDICATORS, searchIndicatorItems } from './data'
 
 const expectedMain = [
-  'MA', 'EMA', 'SMA', 'BOLL', 'SAR', 'BBI', 'VWAP', 'SUPERTREND',
+  'VOL', 'MA', 'EMA', 'SMA', 'BOLL', 'SAR', 'BBI', 'VWAP', 'SUPERTREND',
   'ICHIMOKU', 'WMA', 'HMA', 'VWMA', 'KC', 'DC', 'DEMA', 'TEMA',
   'ENV', 'PIVOT', 'ALLIGATOR', 'LRC', 'VRVP', 'SVP', 'KAMA', 'CE',
   'TYP', 'MED', 'MACROSS', 'MAEMACROSS', 'EMACROSS',

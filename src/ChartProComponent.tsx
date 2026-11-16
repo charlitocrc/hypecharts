@@ -48,6 +48,7 @@ import { DrawingManager, DrawingEditor } from './widget/drawing-manager'
 import type { DrawingItem } from './widget/drawing-manager/model'
 import type { IndicatorSettingParams } from './widget/indicator-setting-modal'
 import { plotDefaults } from './widget/indicator-setting-modal/model'
+import { bindIndicatorDrag, canDragIndicatorToMain } from './indicatorDrag'
 import { presetToOverlayParts } from './widget/drawing-manager/model'
 
 import {
@@ -110,10 +111,13 @@ function createIndicator (
   stored?: StoredIndicator
 ): Nullable<string> {
   if (indicatorType(indicatorName) === 'VOL') {
-    paneOptions = { gap: { bottom: 2 }, ...paneOptions }
+    // Only the dedicated volume pane needs a tighter bottom gap.
+    if (paneOptions?.id !== 'candle_pane') paneOptions = { gap: { bottom: 2 }, ...paneOptions }
   }
   return widget?.createIndicator({
     name: indicatorName,
+    // Derive placement on every add, move, restore and history replay.
+    ...(indicatorType(indicatorName) === 'VOL' ? { ownScale: paneOptions?.id === 'candle_pane' } : {}),
     calcParams: stored?.calcParams,
     visible: stored?.visible,
     // @ts-expect-error
@@ -154,6 +158,7 @@ function createIndicator (
 }
 
 const ChartProComponent: Component<ChartProComponentProps> = props => {
+  let unbindIndicatorDrag: (() => void) | undefined
   let widgetRef: HTMLDivElement | undefined = undefined
   let widget: Nullable<Chart> = null
 
@@ -858,7 +863,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   // and compare wiring (and the pane height for sub-pane moves).
   const moveIndicatorToPane = (name: string, fromPaneId: string, targetId: string): void => {
     const chart = widget
-    if (!chart || targetId === fromPaneId) return
+    if (!chart || targetId === fromPaneId || (targetId === 'candle_pane' && !canDragIndicatorToMain(name))) return
     const onMain = fromPaneId === 'candle_pane'
     const stored = snapshotIndicator(name, fromPaneId, true)
     chart.removeIndicator(fromPaneId, name)
@@ -2285,6 +2290,13 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     countdownTimer = setInterval(updateBarCountdown, 500)
     flowFrame = requestAnimationFrame(flowTick)
 
+    unbindIndicatorDrag = bindIndicatorDrag({
+      chart: widget!, host: widgetRef!, sources: subIndicators,
+      context: () => reqId,
+      blocked: () => modalVisible() || loadingVisible(),
+      move: (name, paneId) => moveIndicatorToPane(name, paneId, 'candle_pane'),
+      label: i18n('indicator_on_chart', props.locale)
+    })
     widgetRef?.addEventListener('mousedown', onStrokeStart, true)
     widgetRef?.addEventListener('touchstart', onStrokeStart, { capture: true, passive: false })
     widgetRef?.addEventListener('contextmenu', handleWidgetContextMenu)
@@ -2411,6 +2423,8 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     cancelLongPress()
     onStrokeEnd()
     clearMeasure()
+    unbindIndicatorDrag?.()
+    unbindIndicatorDrag = undefined
     widgetRef?.removeEventListener('mousedown', onStrokeStart, true)
     widgetRef?.removeEventListener('touchstart', onStrokeStart, true)
     widgetRef?.removeEventListener('contextmenu', handleWidgetContextMenu)
@@ -2900,7 +2914,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
           moveTargets={(() => {
             const current = indicatorSettingModalParams()
             const targets: Array<{ id: string, label: string }> = []
-            if (current.paneId !== 'candle_pane') {
+            if (current.paneId !== 'candle_pane' && canDragIndicatorToMain(current.indicatorName)) {
               targets.push({ id: 'candle_pane', label: i18n('indicator_on_chart', props.locale) })
             }
             Object.entries(subIndicators()).forEach(([name, paneId]) => {
