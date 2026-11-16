@@ -24,7 +24,7 @@ import { load } from './i18n'
 
 import { aggregateBars, parsePeriodText, periodText } from './aggregate'
 
-import { Datafeed, SymbolInfo, Period, DatafeedSubscribeCallback, ChartProOptions, ChartPro,
+import { Datafeed, SymbolInfo, Period, DatafeedSubscribeCallback, ChartProOptions, ChartPro, ChartSelection,
   DatafeedConfiguration, DatafeedExchange, DatafeedSymbolType, SymbolSearchFilters,
   SymbolSearchResult, SymbolResolveError, SymbolResolveErrorCode } from './types'
 
@@ -43,12 +43,12 @@ export {
   setMaxPixelRatio,
   load as loadLocales
 }
-export type { ChartSyncGroup, ChartSyncGroupOptions, ChartGrid, ChartGridOptions } from './multiChart'
+export type { ChartSyncGroup, ChartSyncGroupOptions, ChartGrid, ChartGridOptions, ChartGridSizes } from './multiChart'
 
 export * from './datafeeds'
 
 export type {
-  Datafeed, SymbolInfo, Period, DatafeedSubscribeCallback, ChartProOptions, ChartPro,
+  Datafeed, SymbolInfo, Period, DatafeedSubscribeCallback, ChartProOptions, ChartPro, ChartSelection,
   DatafeedConfiguration, DatafeedExchange, DatafeedSymbolType, SymbolSearchFilters,
   SymbolSearchResult, SymbolResolveError, SymbolResolveErrorCode
 }

@@ -1486,6 +1486,25 @@ var TimeScaleStore = /** @class */ (function () {
         this._chartStore.getCrosshairStore().recalculate(true);
         this._chartStore.getChart().adjustPaneViewport(false, true, true, true);
     };
+    // Update zoom and current scroll atomically. _offsetRightDistance is the
+    // configured realtime padding, and must never become a synced history offset.
+    TimeScaleStore.prototype.setViewport = function (barSpace, offsetRightBarCount) {
+        if (!Number.isFinite(barSpace) || !Number.isFinite(offsetRightBarCount)) return;
+        this._barSpace = Math.max(BarSpaceLimitContants.MIN, Math.min(BarSpaceLimitContants.MAX, barSpace));
+        this._gapBarSpace = this._calcGapBarSpace();
+        this._offsetRightBarCount = offsetRightBarCount;
+        this.adjustVisibleRange();
+        this._chartStore.getCrosshairStore().recalculate(true);
+        this._chartStore.getChart().adjustPaneViewport(false, true, true, true);
+    };
+    TimeScaleStore.prototype.cancelViewportAnimation = function () {
+        if (this._recalcRequestId !== null) cancelAnimationFrame(this._recalcRequestId);
+        if (this._zoomRequestId !== null) cancelAnimationFrame(this._zoomRequestId);
+        this._recalcRequestId = null;
+        this._zoomRequestId = null;
+        this._pendingZoomFactor = 1;
+        this._pendingZoomCoordinate = null;
+    };
     TimeScaleStore.prototype.setTotalBarSpace = function (totalSpace) {
         if (this._totalBarSpace !== totalSpace) {
             this._totalBarSpace = totalSpace;
@@ -12683,6 +12702,7 @@ var ChartEvent = /** @class */ (function () {
                 }
                 case WidgetNameConstants.YAXIS: {
                     var yAxis = pane === null || pane === void 0 ? void 0 : pane.getAxisComponent();
+                    this.cancelViewportAnimation();
                     if (!yAxis.getAutoCalcTickFlag()) {
                         yAxis.setAutoCalcTickFlag(true);
                         this._chart.adjustPaneViewport(false, true, true, true);
@@ -13013,6 +13033,26 @@ var ChartEvent = /** @class */ (function () {
         var bounding = (_a = widget === null || widget === void 0 ? void 0 : widget.getBounding()) !== null && _a !== void 0 ? _a : null;
         return __assign(__assign({}, event), { x: event.x - ((_b = bounding === null || bounding === void 0 ? void 0 : bounding.left) !== null && _b !== void 0 ? _b : 0), y: event.y - ((_c = bounding === null || bounding === void 0 ? void 0 : bounding.top) !== null && _c !== void 0 ? _c : 0) });
     };
+    ChartEvent.prototype.cancelTimeViewportAnimation = function () {
+        if (this._wheelZoomRequestId !== null) cancelAnimationFrame(this._wheelZoomRequestId);
+        this._wheelZoomRequestId = null;
+        this._wheelZoomRemaining = 0;
+        this._wheelZoomCoordinate = null;
+    };
+    ChartEvent.prototype.cancelViewportAnimation = function () {
+        if (this._wheelZoomRequestId !== null) cancelAnimationFrame(this._wheelZoomRequestId);
+        if (this._wheelYZoomRequestId !== null) cancelAnimationFrame(this._wheelYZoomRequestId);
+        if (this._pendingYExtremumRequestId !== null) cancelAnimationFrame(this._pendingYExtremumRequestId);
+        this._wheelZoomRequestId = null;
+        this._wheelYZoomRequestId = null;
+        this._pendingYExtremumRequestId = null;
+        this._wheelZoomRemaining = 0;
+        this._wheelZoomCoordinate = null;
+        this._wheelYZoomRemaining = 0;
+        this._wheelYZoomTarget = null;
+        this._pendingYExtremum = null;
+        this._pendingYExtremumAxis = null;
+    };
     ChartEvent.prototype.destroy = function () {
         if (this._wheelZoomRequestId !== null) {
             cancelAnimationFrame(this._wheelZoomRequestId);
@@ -13055,6 +13095,7 @@ var ChartImp = /** @class */ (function () {
     function ChartImp(container, options) {
         this._panes = new Map();
         this._zoomAnimationRequestId = null;
+        this._scrollAnimationRequestId = null;
         this._initContainer(container);
         this._chartEvent = new ChartEvent(this._chartContainer, this);
         this._chartStore = new ChartStore(this, options);
@@ -13538,6 +13579,9 @@ var ChartImp = /** @class */ (function () {
         return this._chartStore.getTimeScaleStore().getScrollEnabled();
     };
     ChartImp.prototype.scrollByDistance = function (distance, animationDuration) {
+        if (this._scrollAnimationRequestId !== null) cancelAnimationFrame(this._scrollAnimationRequestId);
+        this._scrollAnimationRequestId = null;
+        var chart = this;
         var duration = animationDuration === undefined || animationDuration < 0 ? 0 : animationDuration;
         var timeScaleStore = this._chartStore.getTimeScaleStore();
         if (duration > 0) {
@@ -13549,7 +13593,9 @@ var ChartImp = /** @class */ (function () {
                 var dis = finished ? distance : distance * progress;
                 timeScaleStore.scroll(dis);
                 if (!finished) {
-                    requestAnimationFrame(animation_1);
+                    chart._scrollAnimationRequestId = requestAnimationFrame$1(animation_1);
+                } else {
+                    chart._scrollAnimationRequestId = null;
                 }
             };
             animation_1();
@@ -13558,6 +13604,22 @@ var ChartImp = /** @class */ (function () {
             timeScaleStore.startScroll();
             timeScaleStore.scroll(distance);
         }
+    };
+    ChartImp.prototype.cancelTimeViewportAnimation = function () {
+        if (this._scrollAnimationRequestId !== null) cancelAnimationFrame(this._scrollAnimationRequestId);
+        this._scrollAnimationRequestId = null;
+        if (this._zoomAnimationRequestId !== null) cancelAnimationFrame(this._zoomAnimationRequestId);
+        this._zoomAnimationRequestId = null;
+        this._chartEvent.cancelTimeViewportAnimation();
+        this._chartStore.getTimeScaleStore().cancelViewportAnimation();
+    };
+    ChartImp.prototype.resetViewport = function () {
+        this.cancelTimeViewportAnimation();
+        this._chartEvent.cancelViewportAnimation();
+        var timeScaleStore = this._chartStore.getTimeScaleStore();
+        // Notify sync groups this is an intentional viewport action.
+        this._chartStore.getActionStore().execute(exports.ActionType.OnScroll);
+        timeScaleStore.setViewport(DEFAULT_BAR_SPACE, timeScaleStore.getOffsetRightDistance() / DEFAULT_BAR_SPACE);
     };
     ChartImp.prototype.scrollToRealTime = function (animationDuration) {
         var timeScaleStore = this._chartStore.getTimeScaleStore();
@@ -13714,6 +13776,9 @@ var ChartImp = /** @class */ (function () {
         this.adjustPaneViewport(true, true, true, true, true);
     };
     ChartImp.prototype.destroy = function () {
+        if (this._scrollAnimationRequestId !== null) cancelAnimationFrame(this._scrollAnimationRequestId);
+        this._scrollAnimationRequestId = null;
+        this._chartStore.getTimeScaleStore().cancelViewportAnimation();
         if (this._zoomAnimationRequestId !== null) {
             cancelAnimationFrame(this._zoomAnimationRequestId);
             this._zoomAnimationRequestId = null;

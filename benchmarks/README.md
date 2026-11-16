@@ -92,3 +92,28 @@ node benchmarks/volume-profile.mjs
 Checks fixture finer-candle requests, raw-data profiles, up/down canvas pixels, real settings,
 undo/redo, reload, fixed-drawing restoration, pan/zoom and symbol/period isolation. Also accepts
 PLAYWRIGHT_MODULE and PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH. No live data or reference parity claim.
+
+## Multi-chart workflow
+
+```sh
+npm run build
+node benchmarks/multi-chart.mjs
+# Optional installed executable: node benchmarks/multi-chart.mjs /path/to/chrome-headless-shell
+```
+
+Checks unequal histories, intervals and chart widths using actual timestamp viewport endpoints;
+containing-candle crosshairs; pointer/keyboard dividers and host size restore; symbol/interval links;
+stale symbol resolution; listener/disposal cleanup. Fixture-only Chromium; no live/reference parity claim.
+
+## Chart/study stability
+
+```sh
+npm run build
+node benchmarks/chart-stability.mjs /path/to/chrome-headless-shell
+node benchmarks/study-stability.mjs /path/to/chrome-headless-shell
+```
+
+Controlled Chromium fixtures cover wheel zoom-out across multiple historical pages, reset
+after historical sync/queued animation, stale page success/failure, 1s loading/error isolation,
+listener failures, delayed HTF/compare responses, dedupe, live-over-history precedence and
+disposal. They do not verify live venues or reference-platform parity.

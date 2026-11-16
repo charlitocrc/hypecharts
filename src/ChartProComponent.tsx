@@ -66,6 +66,7 @@ import IntervalBuilderModal from './widget/interval-builder-modal'
 import { ProfileHistory, profileDetailPeriod, profileSource, type ProfileSource } from './profileData'
 import { UTC_DAY } from './volumeProfile'
 import { mapHtfBuckets } from './indicator/timeframe'
+import { HistoryPager, normalizeHistory, validHistoryCandle } from './historyPaging'
 import { compareTooltipValues } from './indicator/compare'
 import type { CompareMode } from './compare'
 import { alignSeries, fillLeadingGaps, nextCompareColor, normalizeCompareValues } from './compare'
@@ -77,11 +78,12 @@ import type { AggregatingDatafeed } from './datafeeds/aggregate'
 
 import i18n from './i18n'
 
-import { SymbolInfo, Period, ChartProOptions, ChartPro, DatafeedConfiguration, DatafeedSubscribeCallback, SymbolResolveError, SymbolSearchResult } from './types'
+import { SymbolInfo, Period, ChartProOptions, ChartPro, DatafeedConfiguration, DatafeedSubscribeCallback, SymbolResolveError, SymbolSearchResult, ChartSelection } from './types'
 
 export interface ChartProComponentProps extends Required<Omit<ChartProOptions, 'container' | 'onSymbolResolveError'>> {
   ref: (chart: ChartPro) => void
   onSymbolResolveError?: (error: SymbolResolveError) => void
+  onSelectionChange?: (selection: ChartSelection) => void
 }
 
 interface ChartSnapshot {
@@ -207,7 +209,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     ]
   }
 
-  let loadingMore = false
+  const historyPager = new HistoryPager()
   let reqId = 0
   let disposed = false
   let unbindShortcuts: Nullable<() => void> = null
@@ -266,7 +268,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     typeof props.datafeed.searchSymbols === 'function' && feedConfig()?.supportsSearch !== false
 
   /** setSymbol with the additive string overload: resolves through the datafeed. */
+  let symbolResolveGeneration = 0
   const applySymbol = (input: SymbolInfo | string): void => {
+    const generation = ++symbolResolveGeneration
     if (typeof input !== 'string') {
       setSymbol(input)
       return
@@ -290,9 +294,11 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       return
     }
     resolve(name).then(info => {
+      if (disposed || generation !== symbolResolveGeneration) return
       resolveCache.set(name, info)
       setSymbol(info)
     }).catch(error => {
+      if (disposed || generation !== symbolResolveGeneration) return
       props.onSymbolResolveError?.({
         name,
         code: error?.code === 'unknown_exchange' ? 'unknown_exchange' : 'unknown_symbol'
@@ -468,27 +474,58 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   // series and mapping its buckets onto chart bars.
   const htfSeries = new Map<string, KLineData[]>()
   const htfSubs = new Map<string, FeedSubscription>()
+  const htfPending = new Map<string, Promise<KLineData[]>>()
+  let studyEpoch = 0
 
   const periodForTimeframe = (tf: string): Period | undefined =>
     props.periods.find(period => period.text === tf)
 
-  const ensureHtfBars = async (ticker: string, period: Period): Promise<KLineData[]> => {
-    const key = `${ticker}|${period.text}`
+  const htfKeyUsed = (key: string): boolean => {
+    const used = (name: string, paneId: string): boolean => {
+      const indicator = widget?.getIndicatorByPaneId(paneId, name) as Nullable<{ timeframe?: string }>
+      return !!indicator?.timeframe && `${symbolKey(untrack(symbol))}|${indicator.timeframe}` === key
+    }
+    return untrack(mainIndicators).some(name => used(name, 'candle_pane')) ||
+      Object.entries(untrack(subIndicators)).some(([name, paneId]) => used(name, paneId))
+  }
+
+  const ensureHtfBars = async (subSymbol: SymbolInfo, period: Period): Promise<KLineData[]> => {
+    const key = `${symbolKey(subSymbol)}|${period.text}`
+    const epoch = studyEpoch
+    const request = reqId
+    const current = (): boolean => !disposed && epoch === studyEpoch && request === reqId && htfKeyUsed(key)
+    if (!current()) return []
     let bars = htfSeries.get(key)
     if (bars === undefined) {
-      const now = Date.now()
-      const [from, to] = adjustFromTo(period, now, 2000)
-      bars = await props.datafeed.getHistoryKLineData(untrack(symbol), period, from, to)
-      htfSeries.set(key, bars)
+      let pending = htfPending.get(key)
+      if (!pending) {
+        const [from, to] = adjustFromTo(period, Date.now(), 2000)
+        pending = Promise.resolve().then(async () => {
+          if (!current() || htfPending.get(key) !== pending) return []
+          const fetched = await props.datafeed.getHistoryKLineData(subSymbol, period, from, to)
+          if (!current() || htfPending.get(key) !== pending) return []
+          const normalized = normalizeHistory(fetched)
+          htfSeries.set(key, normalized)
+          return normalized
+        }).finally(() => {
+          if (htfPending.get(key) === pending) htfPending.delete(key)
+        })
+        htfPending.set(key, pending)
+      }
+      await pending
+      bars = htfSeries.get(key)
+      if (bars === undefined) return []
     }
-    if (!htfSubs.has(key) && !disposed) {
-      const subSymbol = untrack(symbol)
+    if (!current()) return []
+    if (!htfSubs.has(key)) {
       const callback: DatafeedSubscribeCallback = bar => {
-        const current = htfSeries.get(key)
-        if (current === undefined || current.length === 0) return
-        const last = current[current.length - 1]
-        if (bar.timestamp === last.timestamp) current[current.length - 1] = bar
-        else if (bar.timestamp > last.timestamp) current.push(bar)
+        if (!current() || htfSubs.get(key)?.callback !== callback || !validHistoryCandle(bar)) return
+        const series = htfSeries.get(key)
+        if (series === undefined) return
+        const last = series[series.length - 1]
+        if (!last || bar.timestamp > last.timestamp) series.push(bar)
+        else if (bar.timestamp === last.timestamp) series[series.length - 1] = bar
+        else return
         void refreshHtfIndicators()
       }
       htfSubs.set(key, { period, symbol: subSymbol, callback })
@@ -500,7 +537,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   /** Re-align every higher-timeframe study and recalculate it. */
   const refreshHtfIndicators = async (): Promise<void> => {
     const chart = widget
-    if (!chart) return
+    if (!chart || disposed) return
+    const request = reqId
+    const epoch = studyEpoch
     const chartData = chart.getDataList()
     if (chartData.length === 0) return
     const jobs: Promise<unknown>[] = []
@@ -509,9 +548,11 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       if (!indicator?.timeframe) return
       const period = periodForTimeframe(indicator.timeframe)
       if (!period) return
-      const ticker = symbolKey(untrack(symbol))
-      jobs.push(ensureHtfBars(ticker, period).then(bars => {
-        indicator.timeframeData = mapHtfBuckets(chartData, bars)
+      const timeframe = indicator.timeframe
+      jobs.push(ensureHtfBars({ ...untrack(symbol) }, period).then(bars => {
+        if (disposed || request !== reqId || epoch !== studyEpoch ||
+          chart.getIndicatorByPaneId(paneId, name) !== indicator || indicator.timeframe !== timeframe) return
+        indicator.timeframeData = mapHtfBuckets(chart.getDataList(), bars)
         return chart.calcInstance(name, paneId)
       }))
     }
@@ -529,6 +570,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     }
     mainIndicators().forEach(name => scan(name, 'candle_pane'))
     Object.entries(subIndicators()).forEach(([name, paneId]) => scan(name, paneId))
+    for (const key of htfPending.keys()) if (!used.has(key)) htfPending.delete(key)
     ;[...htfSubs.entries()].forEach(([key, sub]) => {
       if (!used.has(key)) {
         props.datafeed.unsubscribe(sub.symbol, sub.period, sub.callback)
@@ -555,9 +597,10 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   const COMPARE_HISTORY_RETRY_MS = 5000
   const compareHistoryDone = new Set<string>()
   const compareHistoryTried = new Map<string, number>()
+  const comparePending = new Map<string, Promise<void>>()
 
   const scheduleCompareRefresh = (): void => {
-    if (compareRefreshTimer !== null) return
+    if (disposed || compareRefreshTimer !== null) return
     compareRefreshTimer = setTimeout(() => {
       compareRefreshTimer = null
       void refreshCompares()
@@ -614,8 +657,13 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     void refreshCompares()
   }
 
-  const ensureCompareBars = async (target: StoredCompareTarget, period: Period): Promise<KLineData[]> => {
-    const key = `${symbolKey(target)}|${period.text}`
+  const ensureCompareBars = async (target: StoredCompareTarget, sourcePeriod: Period): Promise<KLineData[]> => {
+    const key = `${symbolKey(target)}|${sourcePeriod.text}`
+    const request = reqId
+    const epoch = studyEpoch
+    const current = (): boolean => !disposed && request === reqId && epoch === studyEpoch &&
+      compareTargets().some(entry => `${symbolKey(entry.target)}|${untrack(period).text}` === key)
+    if (!current()) return []
     let bars = compareBars.get(key)
     if (bars === undefined) {
       // The live subscription is registered BEFORE the history fetch: if the
@@ -634,60 +682,76 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         name: target.name
       }
       const callback: DatafeedSubscribeCallback = bar => {
-        const current = compareBars.get(key)
-        if (current === undefined) return
-        const last = current[current.length - 1]
+        if (!current() || compareSubs.get(key)?.callback !== callback || !validHistoryCandle(bar)) return
+        const series = compareBars.get(key)
+        if (series === undefined) return
+        const last = series[series.length - 1]
         // An empty series (thin 1s seeds start before the fetch window) grows
         // from its first live bar instead of staying empty forever.
-        if (last === undefined || bar.timestamp > last.timestamp) current.push(bar)
-        else if (bar.timestamp === last.timestamp) current[current.length - 1] = bar
+        if (last === undefined || bar.timestamp > last.timestamp) series.push(bar)
+        else if (bar.timestamp === last.timestamp) series[series.length - 1] = bar
         else return
         scheduleCompareRefresh()
       }
-      compareSubs.set(key, { symbol: subSymbol, period, callback })
-      props.datafeed.subscribe(subSymbol, period, callback)
+      compareSubs.set(key, { symbol: subSymbol, period: sourcePeriod, callback })
+      props.datafeed.subscribe(subSymbol, sourcePeriod, callback)
     }
     // Backfill history once per key, merged into whatever live bars have
     // accumulated (deduped by timestamp). A failed backfill is retried on a
     // later refresh pass instead of taking the series down.
-    if (!compareHistoryDone.has(key) && Date.now() - (compareHistoryTried.get(key) ?? 0) > COMPARE_HISTORY_RETRY_MS) {
+    const alreadyPending = comparePending.has(key)
+    if (!comparePending.has(key) && !compareHistoryDone.has(key) && Date.now() - (compareHistoryTried.get(key) ?? 0) > COMPARE_HISTORY_RETRY_MS) {
       compareHistoryTried.set(key, Date.now())
-      try {
+      const pending = Promise.resolve().then(async () => {
+        if (!current() || comparePending.get(key) !== pending) return
         const now = Date.now()
-        const [from, to] = adjustFromTo(period, now, 500)
+        const [from, to] = adjustFromTo(sourcePeriod, now, 500)
         const fetched = await props.datafeed.getHistoryKLineData(
           { ticker: target.ticker, exchange: target.exchange, market: target.market, shortName: target.shortName, name: target.name },
-          period, from, to
+          sourcePeriod, from, to
         )
+        if (!current() || comparePending.get(key) !== pending) return
         compareHistoryDone.add(key)
         const byTimestamp = new Map<number, KLineData>()
-        for (const bar of fetched) byTimestamp.set(bar.timestamp, bar)
-        for (const bar of bars) if (!byTimestamp.has(bar.timestamp)) byTimestamp.set(bar.timestamp, bar)
+        for (const bar of normalizeHistory(fetched)) byTimestamp.set(bar.timestamp, bar)
+        for (const bar of compareBars.get(key) ?? []) byTimestamp.set(bar.timestamp, bar)
         const merged = [...byTimestamp.values()].sort((a, b) => a.timestamp - b.timestamp)
         compareBars.set(key, merged)
-        bars = merged
-      } catch {
+      }).catch(() => {
         // Keep the live-grown bars; the backfill retries after the window.
-      }
+      }).finally(() => {
+        if (comparePending.get(key) === pending) comparePending.delete(key)
+      })
+      comparePending.set(key, pending)
     }
-    return bars
+    // A slow history request must not block refreshes of bars arriving live.
+    if (!alreadyPending) await comparePending.get(key)
+    return current() ? compareBars.get(key) ?? [] : []
   }
 
   /** Re-align every compare instance against the current chart data. */
   const refreshCompares = async (): Promise<void> => {
     const chart = widget
-    if (!chart) return
+    if (!chart || disposed) return
+    const request = reqId
+    const epoch = studyEpoch
     const chartData = chart.getDataList()
     if (chartData.length === 0) return
-    const anchorClose = chartData[0].close
-    const timestamps = chartData.map(bar => bar.timestamp)
     const jobs: Promise<unknown>[] = []
     compareTargets().forEach(({ name, target, mode }) => {
+      const instance = chart.getIndicatorByPaneId('candle_pane', name) as any
       jobs.push(ensureCompareBars(target, untrack(period)).then(bars => {
+        if (disposed || request !== reqId || epoch !== studyEpoch ||
+          chart.getIndicatorByPaneId('candle_pane', name) !== instance ||
+          symbolKey(instance?.extendData?.symbol ?? {}) !== symbolKey(target) ||
+          (instance?.extendData?.mode ?? 'pinned') !== mode) return
+        const latest = chart.getDataList()
+        if (!latest.length) return
+        const anchorClose = latest[0].close
+        const timestamps = latest.map(bar => bar.timestamp)
         const aligned = fillLeadingGaps(alignSeries(timestamps, bars))
         const values = normalizeCompareValues(aligned, anchorClose, mode)
         if (!values) return
-        const instance = chart.getIndicatorByPaneId('candle_pane', name) as any
         const existing = instance?.extendData ?? {}
         chart.overrideIndicator({
           name,
@@ -709,6 +773,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   const pruneCompareState = (): void => {
     const used = new Set<string>()
     compareTargets().forEach(({ target }) => used.add(`${symbolKey(target)}|${untrack(period).text}`))
+    for (const key of comparePending.keys()) if (!used.has(key)) comparePending.delete(key)
     ;[...compareSubs.entries()].forEach(([key, sub]) => {
       if (!used.has(key)) {
         props.datafeed.unsubscribe(sub.symbol, sub.period, sub.callback)
@@ -718,6 +783,25 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         compareHistoryTried.delete(key)
       }
     })
+  }
+
+  /** Invalidate pending work before releasing subscriptions for a dataset change. */
+  const resetStudyData = (): void => {
+    studyEpoch++
+    htfPending.clear()
+    comparePending.clear()
+    const subscriptions = [...htfSubs.values(), ...compareSubs.values()]
+    htfSubs.clear()
+    compareSubs.clear()
+    htfSeries.clear()
+    compareBars.clear()
+    compareHistoryDone.clear()
+    compareHistoryTried.clear()
+    if (compareRefreshTimer !== null) clearTimeout(compareRefreshTimer)
+    compareRefreshTimer = null
+    for (const sub of subscriptions) {
+      try { props.datafeed.unsubscribe(sub.symbol, sub.period, sub.callback) } catch {}
+    }
   }
 
   const [indicatorFavorites, setIndicatorFavorites] = createSignal(readIndicatorFavorites())
@@ -1123,7 +1207,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   const flowTick = () => {
     flowFrame = requestAnimationFrame(flowTick)
     if (!widget) return
-    const active = isLineLockedPeriod(untrack(period)) && followLive && !document.hidden
+    const active = !loadingVisible() && dataState() === 'ok' && isLineLockedPeriod(untrack(period)) && followLive && !document.hidden
     if (active !== flowStyleActive) {
       flowStyleActive = active
       // Tells the vendor's candle-area view to draw the line past the newest
@@ -1860,7 +1944,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     if (!widget) {
       return
     }
-    widget.setBarSpace(6)
+    resetRealtimeQueue()
+    followLive = true
+    widget.resetViewport()
     const panes = (widget as any).getAllPanes?.()
     panes?.forEach((pane: any) => {
       const yAxis = pane?.getAxisComponent?.()
@@ -1868,7 +1954,6 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         yAxis.setAutoCalcTickFlag(true)
       }
     })
-    widget.scrollToRealTime()
     ;(widget as any).adjustPaneViewport(false, true, true, true)
     closeContextMenu()
   }
@@ -1967,42 +2052,55 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   // UX-001 go-to-date: page older history in through the same applyMoreData
   // path the wheel uses until the loaded series covers the target (bounded —
   // a venue with no more pages ends the loop), then jump to it.
-  let goingToHistory = false
+  const loadOlderPage = (): Promise<boolean> => {
+    const chart = widget
+    if (!chart || disposed || loadingVisible() || isBrickType(untrack(candleType)) || rawData.length === 0) return Promise.resolve(false)
+    const request = reqId
+    const selectedSymbol = untrack(symbol)
+    const selectedPeriod = untrack(period)
+    const before = rawData[0].timestamp
+    const [, to] = adjustFromTo(selectedPeriod, before - 1, 1)
+    const [from] = adjustFromTo(selectedPeriod, to, 500)
+    const current = (): boolean => !disposed && request === reqId && chart === widget
+    return historyPager.request(
+      () => props.datafeed.getHistoryKLineData(selectedSymbol, selectedPeriod, from, to),
+      page => {
+        if (!current() || isBrickType(untrack(candleType))) return false
+        const older = normalizeHistory(page, from, Math.min(to, before - 1))
+        rawData = older.concat(rawData)
+        chart.applyMoreData(untrack(candleType) === 'heikin_ashi' ? heikinAshi(older) : older, older.length > 0)
+        refreshDataDrawings()
+        void refreshHtfIndicators()
+        void refreshCompares()
+        return older.length > 0
+      },
+      () => { if (current()) chart.applyMoreData([], false) }
+    )
+  }
+
+  let goingToHistory: object | null = null
   const goToTimestamp = async (target: number): Promise<void> => {
-    if (!widget || goingToHistory) return
+    if (!widget || goingToHistory || loadingVisible() || !Number.isFinite(target)) return
     if (isBrickType(untrack(candleType))) {
       // Synthetic brick series are seeded per session; there is no older
       // venue history to page through.
       widget.scrollToTimestamp(target, 0)
       return
     }
-    goingToHistory = true
-    loadingMore = true
+    const chart = widget
+    const request = reqId
+    const token = {}
+    goingToHistory = token
     try {
       for (let attempt = 0; attempt < 60; attempt++) {
-        const list = widget.getDataList()
+        if (disposed || request !== reqId) return
+        const list = chart.getDataList()
         if (list.length === 0 || list[0].timestamp <= target) break
-        const p = untrack(period)
-        const [, to] = adjustFromTo(p, list[0].timestamp - 1, 1)
-        const [from] = adjustFromTo(p, to, 500)
-        let older: KLineData[] = []
-        try {
-          older = await props.datafeed.getHistoryKLineData(untrack(symbol), p, from, to)
-        } catch {
-          break
-        }
-        if (older.length === 0) break
-        rawData = older.concat(rawData)
-        const type = untrack(candleType)
-        widget.applyMoreData(type === 'heikin_ashi' ? heikinAshi(older) : older, older.length > 0)
-        refreshDataDrawings()
-        void refreshHtfIndicators()
-        void refreshCompares()
+        if (!await loadOlderPage()) break
       }
-      widget.scrollToTimestamp(target, 0)
+      if (!disposed && request === reqId) chart.scrollToTimestamp(target, 0)
     } finally {
-      loadingMore = false
-      goingToHistory = false
+      if (goingToHistory === token) goingToHistory = null
     }
   }
 
@@ -2249,38 +2347,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     indicatorsReady = true
     const barSpace = read<{ barSpace?: unknown }>(VIEWPORT_KEY)?.barSpace
     if (typeof barSpace === 'number' && barSpace >= 1 && barSpace <= 50) widget?.setBarSpace(barSpace)
-    widget?.loadMore(timestamp => {
-      if (loadingMore) {
-        return
-      }
-      loadingMore = true
-      const get = async () => {
-        const p = period()
-        const [, to] = adjustFromTo(p, timestamp! - 1, 1)
-        const [from] = adjustFromTo(p, to, 500)
-        try {
-          const kLineDataList = await props.datafeed.getHistoryKLineData(symbol(), p, from, to)
-          rawData = kLineDataList.concat(rawData)
-          const type = untrack(candleType)
-          if (isBrickType(type)) {
-            widget?.applyMoreData([], false)
-          } else {
-            // ponytail: older HA bars are seeded independently, so the first few bars at the page seam differ slightly from a full recompute (error halves each bar)
-            widget?.applyMoreData(type === 'heikin_ashi' ? heikinAshi(kLineDataList) : kLineDataList, kLineDataList.length > 0)
-          }
-          refreshDataDrawings()
-          void refreshHtfIndicators()
-          void refreshCompares()
-        } catch (e) {
-          // ponytail: a failed page ends paging for this dataset rather than retrying.
-          // klinecharts re-fires loadMore whenever the left edge is visible, so retrying
-          // here loops while the user sits at the edge. Switching period resets it.
-          widget?.applyMoreData([], false)
-        }
-        loadingMore = false
-      }
-      get()
-    })
+    widget?.loadMore(() => { void loadOlderPage() })
     widget?.subscribeAction(ActionType.OnTooltipIconClick, (data) => {
       if (data.indicatorName) {
         switch (data.iconId) {
@@ -2365,6 +2432,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     // A shared feed outlives this chart; requests still in flight must not subscribe.
     disposed = true
     reqId++
+    resetStudyData()
+    historyPager.reset()
+    goingToHistory = null
     releaseMainSubscription()
     ;[...htfSubs.values(), ...compareSubs.values()].forEach(sub => {
       props.datafeed.unsubscribe(sub.symbol, sub.period, sub.callback)
@@ -2478,6 +2548,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     }
     retryTick()
     const id = ++reqId
+    resetStudyData()
+    historyPager.reset()
+    goingToHistory = null
     profileEpoch++
     profileHistory.reset()
     profileJobKey = ''
@@ -2496,7 +2569,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         if (id !== reqId) {
           return
         }
-        rawData = kLineDataList.slice()
+        rawData = normalizeHistory(kLineDataList)
         presentData()
         if (symbolKey(s) !== restoredTicker) {
           restoredTicker = symbolKey(s)
@@ -2507,12 +2580,13 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         void refreshHtfIndicators()
         void refreshCompares()
         const callback: DatafeedSubscribeCallback = data => {
+          if (disposed || id !== reqId || !validHistoryCandle(data)) return
           applyRealtimeBar(data)
           refreshDataDrawings()
         }
         mainSubscription = { symbol: s, period: p, callback }
         props.datafeed.subscribe(s, p, callback)
-        setDataState(kLineDataList.length > 0 ? 'ok' : 'empty')
+        setDataState(rawData.length > 0 ? 'ok' : 'empty')
       } catch (e) {
         if (id !== reqId) {
           return
@@ -2520,10 +2594,29 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         setDataState('error')
       }
       setLoadingVisible(false)
+      // Initial paint can reach the left edge while the main request is still
+      // marked loading. Re-arm core paging once this dataset is actually ready.
+      if (dataState() !== 'error') widget?.applyMoreData([], rawData.length > 0 && !isBrickType(untrack(candleType)))
       syncChartActionsWidth()
     }
     get()
     return { symbol: s, period: p }
+  })
+
+  let selectionNotificationQueued = false
+  createEffect(() => {
+    void [symbol(), period(), loadingVisible(), dataState(), candleType()]
+    if (selectionNotificationQueued) return
+    selectionNotificationQueued = true
+    queueMicrotask(() => {
+      selectionNotificationQueued = false
+      if (disposed) return
+      untrack(() => props.onSelectionChange?.({
+        symbol: symbol(), period: period(), loading: loadingVisible(),
+        dataReady: !loadingVisible() && dataState() === 'ok' && (widget?.getDataList().length ?? 0) > 0,
+        timeBased: !isBrickType(candleType())
+      }))
+    })
   })
 
   createEffect(() => {

@@ -413,3 +413,7 @@ span.chip { cursor: default; }
   .cta { --c: 24px; }
   #chart { height: 440px; }
 }
+
+#chart-links { font-size: 12px; white-space: nowrap; }
+#chart-links label { margin-inline-end: 8px; }
+#chart-links input { vertical-align: middle; accent-color: var(--accent, #2962ff); }

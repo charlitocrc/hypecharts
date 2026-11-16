@@ -1,5 +1,5 @@
 import { createChartGrid, KLineChartPro } from '../../src'
-import type { ChartGrid, ChartSyncGroup } from '../../src'
+import type { ChartGrid, ChartSyncGroup, ChartGridSizes } from '../../src'
 import type { Period, SymbolInfo } from '../../src/types'
 import { createDemoFeed } from './datafeed'
 import './style.css'
@@ -87,7 +87,7 @@ let splitLayout = false
 // grid pane shows — so a reload puts the split back the way it was left.
 const WORKSPACE_KEY = 'hypecharts-demo:workspace-v1'
 interface SavedCell { symbol?: string, period?: string }
-interface SavedWorkspace { layout: 'single' | 'split', cells: SavedCell[] }
+interface SavedWorkspace { layout: 'single' | 'split', cells: SavedCell[], sizes?: Partial<ChartGridSizes>, links?: { symbol: boolean, period: boolean } }
 
 const readWorkspace = (): SavedWorkspace | null => {
   try {
@@ -106,6 +106,8 @@ const saveWorkspace = (): void => {
   try {
     const workspace: SavedWorkspace = {
       layout: splitLayout ? 'split' : 'single',
+      sizes: grid?.getSizes(),
+      links: { symbol: syncGroup?.getOptions().symbol ?? false, period: syncGroup?.getOptions().period ?? false },
       cells: charts.map(chart => {
         // Mid-rebuild (or disposed) instances have no live API — persist
         // nothing for them rather than throwing.
@@ -274,6 +276,10 @@ async function main (): Promise<void> {
   syncGroup = null
   charts = []
   const mountCharts = (): void => {
+    // A resolved selection may be newer than the timer's last persisted record.
+    // Flush before reading saved targets; otherwise a quick layout switch can
+    // replace the user's latest venue with that older saved symbol.
+    if (charts.some(chart => chart.getChart() !== null)) saveWorkspace()
     // Read the previous symbol while the chart is still alive — grid.destroy()
     // disposes every instance below.
     const previous = charts[0]?.getChart() ? charts[0].resolvedSymbol() : undefined
@@ -299,7 +305,10 @@ async function main (): Promise<void> {
       container,
       columns: 1,
       gap: 4,
-      sync: true,
+      sync: { symbol: saved?.links?.symbol === true, period: saved?.links?.period === true },
+      resizable: true,
+      sizes: saved?.sizes,
+      onResize: () => saveWorkspace(),
       sharedTimeAxis: true,
       createChart: (cell, index, { timeAxisVisible }) => {
         // The constructor gets a fully-formed SymbolInfo (strings resolve only
@@ -317,6 +326,9 @@ async function main (): Promise<void> {
     grid.setLayout(splitLayout ? 2 : 1)
     charts = grid.charts
     syncGroup = grid.syncGroup
+    el<HTMLElement>('chart-links').hidden = !splitLayout
+    el<HTMLInputElement>('link-symbol').checked = syncGroup?.getOptions().symbol ?? false
+    el<HTMLInputElement>('link-period').checked = syncGroup?.getOptions().period ?? false
     // Dev/testing hook: refresh on every mount so it never holds disposed charts.
     ;(window as unknown as { __hypecharts: KLineChartPro[] }).__hypecharts = charts
     saveWorkspace()
@@ -335,6 +347,13 @@ async function main (): Promise<void> {
     el<HTMLButtonElement>('layout-toggle').textContent = splitLayout ? '⊟ Single' : '◱ Split'
     mountCharts()
   })
+
+  for (const [id, key] of [['link-symbol', 'symbol'], ['link-period', 'period']] as const) {
+    el<HTMLInputElement>(id).addEventListener('change', event => {
+      syncGroup?.setOptions({ [key]: (event.currentTarget as HTMLInputElement).checked })
+      saveWorkspace()
+    })
+  }
 
   el<HTMLButtonElement>('theme-toggle').addEventListener('click', () => {
     const toLight = currentTheme === 'dark'

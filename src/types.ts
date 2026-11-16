@@ -112,6 +112,15 @@ export interface Datafeed {
   getServerTime? (): Promise<number>
 }
 
+/** A settled chart selection; loading/ready distinguish old data from the requested dataset. */
+export interface ChartSelection {
+  symbol: SymbolInfo
+  period: Period
+  loading: boolean
+  dataReady: boolean
+  timeBased: boolean
+}
+
 export interface ChartProOptions {
   container: string | HTMLElement
   styles?: DeepPartial<Styles>

@@ -7,7 +7,7 @@ const delayMs = 3000
 const now = Math.floor(Date.now() / 900000) * 900000
 const bars = Array.from({ length: 500 }, (_, i) => ({ t: now - (499 - i) * 900000,
   o: '100', h: '104', l: '97', c: String(100 + Math.sin(i / 10)), v: '1000' }))
-const browser = await chromium.launch({ headless: true })
+const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? process.argv[2] })
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } })
   page.setDefaultTimeout(10000)
@@ -37,7 +37,7 @@ try {
       }
       body = url.pathname.endsWith('exchangeInfo') ? {
         symbols: [{ symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', status: 'TRADING', filters: [] }]
-      } : bars.map(b => [b.t, b.o, b.h, b.l, b.c, b.v])
+      } : bars.filter(b => b.t >= Number(url.searchParams.get('startTime') ?? 0) && b.t <= Number(url.searchParams.get('endTime') ?? Infinity)).map(b => [b.t, b.o, b.h, b.l, b.c, b.v])
     } else throw new Error('Unexpected external request: ' + url.href)
     return route.fulfill({ json: body, headers })
   })
@@ -54,21 +54,42 @@ try {
   await page.getByRole('button', { name: 'Switch to Binance', exact: true }).click()
   await page.waitForFunction(() => window.__hypecharts[0].resolvedSymbol().exchange === 'BINANCE' && window.__hypecharts[0].getChart().getDataList().length === 500)
   await page.locator('#layout-toggle').click()
-  await page.waitForFunction(() => window.__hypecharts.length === 2 && window.__hypecharts.every(c => c.getChart().getDataList().length === 500))
+  await page.waitForFunction(() => window.__hypecharts.length === 2 && window.__hypecharts.every(c => c.getChart().getDataList().length === 500)).catch(async error => {
+    console.error('Split state:', JSON.stringify(await page.evaluate(() => ({charts: window.__hypecharts.map(c => ({symbol:c.resolvedSymbol(),period:c.getPeriod(),count:c.getChart().getDataList().length,selection:c.getSelection()})), saved:localStorage.getItem('hypecharts-demo:workspace-v1')}))), errors)
+    throw error
+  })
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('hypecharts-demo:workspace-v1')))
   assert.equal(saved.layout, 'split')
   assert.deepEqual(saved.cells.map(cell => cell.symbol), ['BINANCE:BTCUSDT', 'HYPERLIQUID:BTC'])
+  await page.locator('#chart-links').waitFor({ state: 'visible' })
+  const separator = page.getByRole('separator', { name: 'Resize chart rows 1 and 2' })
+  await separator.focus()
+  await page.keyboard.press('ArrowDown')
+  await page.locator('#link-period').check()
+  const resized = await page.evaluate(() => JSON.parse(localStorage.getItem('hypecharts-demo:workspace-v1')))
+  assert.ok(resized.sizes.rows[0] > 0.5)
+  assert.equal(resized.links.period, true)
+  assert.deepEqual(resized.cells.map(cell => cell.symbol), ['BINANCE:BTCUSDT', 'HYPERLIQUID:BTC'], 'linking intervals must keep independent venues')
   secondaryFinished = false
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForFunction(() => window.__hypecharts?.length === 2 &&
     window.__hypecharts.every(c => c.getChart()?.getDataList().length === 500) &&
     window.__hypecharts[0].resolvedSymbol().exchange === 'BINANCE' &&
-    window.__hypecharts[1].resolvedSymbol().exchange === 'HYPERLIQUID')
+    window.__hypecharts[1].resolvedSymbol().exchange === 'HYPERLIQUID').catch(async error => {
+      console.error('Restore state:', JSON.stringify(await page.evaluate(() => ({
+        charts: window.__hypecharts?.map(c => ({ symbol: c.resolvedSymbol(), period: c.getPeriod(), count: c.getChart()?.getDataList().length, selection: c.getSelection() })),
+        saved: localStorage.getItem('hypecharts-demo:workspace-v1'), status: document.getElementById('feed-status')?.textContent
+      }))), errors)
+      throw error
+    })
   assert.equal(secondaryFinished, true, 'Saved split workspace must wait for both required venues')
   const restored = await page.evaluate(() => window.__hypecharts.map(c => c.resolvedSymbol().exchange))
   assert.deepEqual(restored, ['BINANCE', 'HYPERLIQUID'])
+  assert.equal(await page.locator('#link-period').isChecked(), true)
+  const restoredSizes = await page.evaluate(() => JSON.parse(localStorage.getItem('hypecharts-demo:workspace-v1')).sizes)
+  assert.deepEqual(restoredSizes, resized.sizes)
   assert.deepEqual(errors, [])
   console.log(JSON.stringify({ readyMs, secondaryProbeDelayMs: delayMs,
-    verified: ['primary renders before secondary probe', 'indicator menu opens', 'late venue switch', 'split layout', 'saved split restoration'],
+    verified: ['primary renders before secondary probe', 'indicator menu opens', 'late venue switch', 'split layout', 'saved split restoration', 'keyboard divider resize', 'size/link-flag restoration'],
     limitations: 'Single localhost fixture run; readiness is a paint opportunity, not actual compositor presentation or live connectivity.' }, null, 2))
 } finally { await browser.close() }

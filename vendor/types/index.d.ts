@@ -915,6 +915,10 @@ export interface Chart {
 	setScrollEnabled: (enabled: boolean) => void;
 	isScrollEnabled: () => boolean;
 	scrollByDistance: (distance: number, animationDuration?: number) => void;
+	/** Cancel pending viewport gestures and restore default zoom at the configured live padding. */
+	resetViewport: () => void;
+	/** Stop pending horizontal gestures without changing price-axis state. */
+	cancelTimeViewportAnimation: () => void;
 	scrollToRealTime: (animationDuration?: number) => void;
 	scrollToDataIndex: (dataIndex: number, animationDuration?: number) => void;
 	scrollToTimestamp: (timestamp: number, animationDuration?: number) => void;

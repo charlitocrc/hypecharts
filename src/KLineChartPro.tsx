@@ -18,7 +18,7 @@ import { utils, Nullable, DeepPartial, Styles, Chart } from 'klinecharts'
 
 import ChartProComponent from './ChartProComponent'
 
-import { SymbolInfo, Period, ChartPro, ChartProOptions } from './types'
+import { SymbolInfo, Period, ChartPro, ChartProOptions, ChartSelection } from './types'
 
 export default class KLineChartPro implements ChartPro {
   constructor (options: ChartProOptions) {
@@ -61,6 +61,13 @@ export default class KLineChartPro implements ChartPro {
           timezone={options.timezone ?? 'Asia/Shanghai'}
           mainIndicators={options.mainIndicators ?? ['MA']}
           subIndicators={options.subIndicators ?? ['VOL']}
+          onSelectionChange={selection => {
+            this._selection = selection
+            for (const listener of [...this._selectionListeners]) {
+              if (this._disposing) break
+              try { listener(selection) } catch (error) { console.error('Chart selection listener failed', error) }
+            }
+          }}
           onSymbolResolveError={options.onSymbolResolveError}
           datafeed={options.datafeed}/>
       ),
@@ -74,13 +81,44 @@ export default class KLineChartPro implements ChartPro {
 
   private _dispose: Nullable<() => void> = null
 
+  private _selection: ChartSelection | null = null
+  private _selectionListeners = new Set<(selection: ChartSelection) => void>()
+  private _disposeListeners = new Set<() => void>()
+  private _disposing = false
+
+  getSelection (): ChartSelection | null { return this._selection }
+
+  subscribeSelectionChange (listener: (selection: ChartSelection) => void): () => void {
+    if (this._disposing || this._dispose === null) return () => {}
+    this._selectionListeners.add(listener)
+    return () => { this._selectionListeners.delete(listener) }
+  }
+
+  subscribeDispose (listener: () => void): () => void {
+    if (this._disposing || this._dispose === null) return () => {}
+    this._disposeListeners.add(listener)
+    return () => { this._disposeListeners.delete(listener) }
+  }
+
   dispose (): void {
-    this._dispose?.()
-    this._dispose = null
-    this._chartApi = null
-    this._container?.classList.remove('klinecharts-pro')
-    this._container?.removeAttribute('data-theme')
-    this._container = null
+    if (this._dispose === null || this._disposing) return
+    this._disposing = true
+    const listeners = [...this._disposeListeners]
+    this._disposeListeners.clear()
+    this._selectionListeners.clear()
+    this._selection = null
+    try {
+      for (const listener of listeners) {
+        try { listener() } catch (error) { console.error('Chart disposal listener failed', error) }
+      }
+      this._dispose()
+    } finally {
+      this._dispose = null
+      this._chartApi = null
+      this._container?.classList.remove('klinecharts-pro')
+      this._container?.removeAttribute('data-theme')
+      this._container = null
+    }
   }
 
   setTheme (theme: string): void {
@@ -137,6 +175,6 @@ export default class KLineChartPro implements ChartPro {
   }
 
   getChart (): Nullable<Chart> {
-    return this._chartApi!.getChart()
+    return this._chartApi?.getChart() ?? null
   }
 }
