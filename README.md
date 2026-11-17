@@ -17,7 +17,8 @@ Other scripts:
 | Script | What it does |
 |---|---|
 | `npm test` | Unit + regression suite (vitest) |
-| `npm run build` | Library build (ESM/UMD + bundled vendored core + d.ts) |
+| `npm run build` | Library build (ESM/CJS/UMD + bundled core + TypeScript declarations) |
+| `npm run test:package` | Pack, install offline, type-check and run standalone browser consumers (requires Playwright Chromium) |
 | `npm run docs:dev` | Docs site (vitepress) |
 | `npm run build:demo` | Static demo build → `dist-demo/` (Cloudflare Pages: build command + output dir) |
 | `node benchmarks/<name>.mjs` | Performance/behavior harnesses — see [benchmarks/README.md](benchmarks/README.md) |
@@ -29,15 +30,44 @@ built locally from `dist/` — the vendored patched KLineChart core ships inside
 
 ```js
 import { KLineChartPro, HyperliquidDatafeed } from 'hypecharts'
-import 'hypecharts/dist/klinecharts-pro.css'
+import 'hypecharts/styles.css'
 
-new KLineChartPro({
+const chart = new KLineChartPro({
   container: 'chart',
+  locale: 'en-US',
+  timezone: 'Etc/UTC',
   symbol: { ticker: 'BTC', exchange: 'HYPERLIQUID', market: 'perp', pricePrecision: 1 },
   period: { multiplier: 15, timespan: 'minute', text: '15m' },
   datafeed: new HyperliquidDatafeed()
 })
+// chart.dispose() when the host unmounts
 ```
+
+Create the container before initializing the chart and give it a height:
+
+```html
+<div id="chart" style="height: 600px"></div>
+```
+
+The package includes its patched chart core and runtime dependencies. No separate
+`klinecharts` or framework installation is required. ESM imports and CommonJS
+`require('hypecharts')` are supported by browser bundlers, with matching TypeScript
+declarations. The library requires a browser DOM at import time; in SSR applications,
+load it dynamically on the client after mounting.
+
+`hypecharts/styles.css` is the supported stylesheet entry point. The existing
+`hypecharts/dist/klinecharts-pro.css` import remains available. Direct browser script
+usage can continue to load `dist/klinecharts-pro.umd.js`, which exposes `klinechartspro`.
+The existing ESM file `dist/klinecharts-pro.js` also remains available. Package exports
+define the supported entry points; internal source files are not public imports.
+
+`npm pack` and `npm publish` build fresh artifacts automatically through `prepack`.
+Before releasing, run `npm run test:package`. It builds the tarball, installs it into
+an isolated project with an empty cache and no network, checks strict TypeScript
+ESM/CommonJS consumers, and verifies production browser bundles and the legacy UMD
+script with fixture data. Install the test browser with `npx playwright install chromium`
+or set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an existing Chromium executable.
+These checks validate packaging and basic integration, not live exchange behavior.
 
 ### Contributing
 

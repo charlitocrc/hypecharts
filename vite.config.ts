@@ -41,12 +41,16 @@ export default defineConfig({
     lib: {
       entry: './src/index.ts',
       name: 'klinechartspro',
+      formats: ['es', 'cjs', 'umd'],
       fileName: (format) => {
         if (format === 'es') {
           return 'klinecharts-pro.js'
         }
         if (format === 'umd') {
           return 'klinecharts-pro.umd.js'
+        }
+        if (format === 'cjs') {
+          return 'klinecharts-pro.cjs'
         }
       }
     }

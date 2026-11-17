@@ -3,9 +3,28 @@
   "version": "0.1.0",
   "description": "Open-source crypto charting built on KLineChart — 60 indicators, 59 drawing tools, live Hyperliquid/Binance datafeeds, no license fees.",
   "type": "module",
-  "main": "./dist/klinecharts-pro.umd.js",
+  "main": "./dist/klinecharts-pro.cjs",
   "module": "./dist/klinecharts-pro.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/klinecharts-pro.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/klinecharts-pro.cjs"
+      },
+      "default": "./dist/klinecharts-pro.js"
+    },
+    "./styles.css": "./dist/klinecharts-pro.css",
+    "./dist/klinecharts-pro.css": "./dist/klinecharts-pro.css",
+    "./dist/klinecharts-pro.js": "./dist/klinecharts-pro.js",
+    "./dist/klinecharts-pro.cjs": "./dist/klinecharts-pro.cjs",
+    "./dist/klinecharts-pro.umd.js": "./dist/klinecharts-pro.umd.js",
+    "./package.json": "./package.json"
+  },
   "files": [
     "LICENSE",
     "README.md",
@@ -26,7 +45,6 @@
     "tradingview",
     "klinecharts",
     "canvas"
-
   ],
   "author": "liihuu",
   "license": "Apache-2.0",
@@ -35,8 +53,10 @@
     "demo": "vite --config vite.config.demo.ts --force",
     "test": "vitest run --environment node",
     "build-core": "tsc && vite build",
-    "build-dts": "dts-bundle-generator --no-banner true --umd-module-name klinechartspro -o dist/index.d.ts src/index.ts",
+    "build-dts": "dts-bundle-generator --no-banner true --umd-module-name klinechartspro -o dist/index.d.ts src/index.ts && node scripts/package-types.mjs",
     "build": "npm run build-core && npm run build-dts",
+    "prepack": "npm run build",
+    "test:package": "node scripts/package-smoke.mjs",
     "build:demo": "vite build --config vite.config.demo.ts",
     "docs:dev": "vitepress dev docs/site",
     "docs:build": "vitepress build docs/site",
@@ -67,9 +87,7 @@
     "vite-plugin-solid": "^2.6.1",
     "vitepress": "^1.0.0-alpha.75",
     "vitest": "^0.28.4",
-    "klinecharts": "file:vendor"
-  },
-  "dependencies": {
+    "klinecharts": "file:vendor",
     "lodash": "^4.17.21",
     "solid-js": "^1.6.11"
   },
