@@ -88,12 +88,14 @@ import i18n from './i18n'
 
 import { SymbolInfo, Period, ChartProOptions, ChartPro, DatafeedConfiguration, DatafeedSubscribeCallback, SymbolResolveError, SymbolSearchResult, ChartSelection, ChartSelectionRequest, ChartSelectionOptions } from './types'
 import { ChartSelectionError, SelectionRequests, isSelectionRequest } from './selection'
+import { validDatafeedConfiguration, type DiagnosticInput } from './diagnostics'
 
 /** Internal rendered API; the outer class owns lifecycle and selection subscriptions. */
 export type ChartProComponentApi = Omit<ChartPro, 'dispose' | 'getSelection' | 'subscribeSelectionChange' | 'subscribeDispose'>
 
-export interface ChartProComponentProps extends Required<Omit<ChartProOptions, 'container' | 'onSymbolResolveError'>> {
+export interface ChartProComponentProps extends Required<Omit<ChartProOptions, 'container' | 'onSymbolResolveError' | 'onDiagnostic'>> {
   ref: (chart: ChartProComponentApi) => void
+  reportDiagnostic: (input: DiagnosticInput, current?: () => boolean) => void
   onSymbolResolveError?: (error: SymbolResolveError) => void
   onSelectionChange?: (selection: ChartSelection) => void
 }
@@ -236,6 +238,24 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   let reqId = 0
   let mainLoadError: ChartSelectionError | undefined
   let disposed = false
+  const reportDiagnostic = (input: DiagnosticInput, current: () => boolean = () => true): void => {
+    props.reportDiagnostic(input, () => !disposed && current())
+  }
+  const unsubscribeFeed = (sub: FeedSubscription, scope?: DiagnosticInput['scope'], current: () => boolean = () => true): void => {
+    try { props.datafeed.unsubscribe(sub.symbol, sub.period, sub.callback) } catch (cause) {
+      reportDiagnostic({ code: 'subscription_failed', operation: 'unsubscribe', cause, symbol: sub.symbol, period: sub.period, scope, retryable: false }, current)
+    }
+  }
+  const studyFailures = new Map<string, object>()
+  const studyDiagnostic = (key: string, input: DiagnosticInput, current: () => boolean): void => {
+    if (!current() || studyFailures.has(key)) return
+    if (studyFailures.size >= 128) studyFailures.delete(studyFailures.keys().next().value as string)
+    const marker = {}
+    studyFailures.set(key, marker)
+    reportDiagnostic(input, () => studyFailures.get(key) === marker && current())
+  }
+  const connectionOutages = new Map<string, object>()
+  let connectionSymbol = ''
   let unbindShortcuts: Nullable<() => void> = null
 
   const [theme, setTheme] = createSignal(props.theme)
@@ -331,6 +351,8 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   }
 
   const notifyResolveError = (name: string, error: unknown): void => {
+    const generation = symbolResolveGeneration
+    reportDiagnostic({ code: 'symbol_resolve_failed', symbolName: name, cause: error }, () => generation === symbolResolveGeneration)
     try {
       props.onSymbolResolveError?.({ name, code: (error as { code?: string })?.code === 'unknown_exchange' ? 'unknown_exchange' : 'unknown_symbol' })
     } catch (listenerError) { console.error('Chart symbol resolution listener failed', listenerError) }
@@ -378,7 +400,13 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
           // An unchanged selection must still own a new dataset request.
           setRetryTick(tick => tick + 1)
         })
-      } catch (cause) { selectionRequests.fail(operation, new ChartSelectionError('load_failed', cause)) }
+      } catch (cause) {
+        if (current()) {
+          selectionRequests.fail(operation, new ChartSelectionError('load_failed', cause))
+          const requestId = reqId
+          reportDiagnostic({ code: 'history_failed', symbol: nextSymbol, period: untrack(period), cause, scope: 'main' }, () => reqId === requestId)
+        }
+      }
     }
     void select()
     return operation.promise
@@ -538,7 +566,10 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     profilePending = !!finer && right > left
     publishProfileSource(buildSource(profileDetailBars, profilePending ? 'loading' : 'unavailable'))
     if (!finer || right <= left) return
-    const bars = await profileHistory.load(props.datafeed, currentSymbol, finer, left, right)
+    const profileCurrent = (): boolean => !disposed && dataRequest === reqId && epoch === profileEpoch && dataset === profileDataset
+    const bars = await profileHistory.load(props.datafeed, currentSymbol, finer, left, right, cause => {
+      reportDiagnostic({ code: 'history_failed', cause, symbol: currentSymbol, period: finer, scope: 'profile', retryable: false }, profileCurrent)
+    })
     if (disposed || dataRequest !== reqId || epoch !== profileEpoch || dataset !== profileDataset) return
     profileDetailBars = bars
     profilePending = false
@@ -588,8 +619,12 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
           const fetched = await props.datafeed.getHistoryKLineData(subSymbol, period, from, to)
           if (!current() || htfPending.get(key) !== pending) return []
           const normalized = normalizeHistory(fetched)
+          studyFailures.delete(`htf-history:${key}`)
           htfSeries.set(key, normalized)
           return normalized
+        }).catch(cause => {
+          if (htfPending.get(key) === pending) studyDiagnostic(`htf-history:${key}`, { code: 'history_failed', cause, symbol: subSymbol, period, scope: 'indicator' }, current)
+          throw cause
         }).finally(() => {
           if (htfPending.get(key) === pending) htfPending.delete(key)
         })
@@ -612,7 +647,16 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         void refreshHtfIndicators()
       }
       htfSubs.set(key, { period, symbol: subSymbol, callback })
-      props.datafeed.subscribe(subSymbol, period, callback)
+      try {
+        props.datafeed.subscribe(subSymbol, period, callback)
+        studyFailures.delete(`htf-subscribe:${key}`)
+      } catch (cause) {
+        if (htfSubs.get(key)?.callback === callback) htfSubs.delete(key)
+        unsubscribeFeed({ symbol: subSymbol, period, callback }, 'indicator', current)
+        studyDiagnostic(`htf-subscribe:${key}`, { code: 'subscription_failed', cause, symbol: subSymbol, period, scope: 'indicator' }, current)
+        throw cause
+      }
+      if (!current()) unsubscribeFeed({ symbol: subSymbol, period, callback }, 'indicator', current)
     }
     return bars
   }
@@ -656,9 +700,11 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     for (const key of htfPending.keys()) if (!used.has(key)) htfPending.delete(key)
     ;[...htfSubs.entries()].forEach(([key, sub]) => {
       if (!used.has(key)) {
-        props.datafeed.unsubscribe(sub.symbol, sub.period, sub.callback)
         htfSubs.delete(key)
         htfSeries.delete(key)
+        studyFailures.delete(`htf-history:${key}`)
+        studyFailures.delete(`htf-subscribe:${key}`)
+        unsubscribeFeed(sub, 'indicator')
       }
     })
   }
@@ -777,7 +823,16 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         scheduleCompareRefresh()
       }
       compareSubs.set(key, { symbol: subSymbol, period: sourcePeriod, callback })
-      props.datafeed.subscribe(subSymbol, sourcePeriod, callback)
+      try {
+        props.datafeed.subscribe(subSymbol, sourcePeriod, callback)
+        studyFailures.delete(`compare-subscribe:${key}`)
+      } catch (cause) {
+        if (compareSubs.get(key)?.callback === callback) compareSubs.delete(key)
+        unsubscribeFeed({ symbol: subSymbol, period: sourcePeriod, callback }, 'compare', current)
+        studyDiagnostic(`compare-subscribe:${key}`, { code: 'subscription_failed', cause, symbol: subSymbol, period: sourcePeriod, scope: 'compare' }, current)
+        throw cause
+      }
+      if (!current()) { unsubscribeFeed({ symbol: subSymbol, period: sourcePeriod, callback }, 'compare', current); return [] }
     }
     // Backfill history once per key, merged into whatever live bars have
     // accumulated (deduped by timestamp). A failed backfill is retried on a
@@ -794,14 +849,16 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
           sourcePeriod, from, to
         )
         if (!current() || comparePending.get(key) !== pending) return
+        studyFailures.delete(`compare-history:${key}`)
         compareHistoryDone.add(key)
         const byTimestamp = new Map<number, KLineData>()
         for (const bar of normalizeHistory(fetched)) byTimestamp.set(bar.timestamp, bar)
         for (const bar of compareBars.get(key) ?? []) byTimestamp.set(bar.timestamp, bar)
         const merged = [...byTimestamp.values()].sort((a, b) => a.timestamp - b.timestamp)
         compareBars.set(key, merged)
-      }).catch(() => {
+      }).catch(cause => {
         // Keep the live-grown bars; the backfill retries after the window.
+        if (comparePending.get(key) === pending) studyDiagnostic(`compare-history:${key}`, { code: 'history_failed', cause, symbol: target, period: sourcePeriod, scope: 'compare' }, current)
       }).finally(() => {
         if (comparePending.get(key) === pending) comparePending.delete(key)
       })
@@ -859,11 +916,13 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     for (const key of comparePending.keys()) if (!used.has(key)) comparePending.delete(key)
     ;[...compareSubs.entries()].forEach(([key, sub]) => {
       if (!used.has(key)) {
-        props.datafeed.unsubscribe(sub.symbol, sub.period, sub.callback)
         compareSubs.delete(key)
         compareBars.delete(key)
         compareHistoryDone.delete(key)
         compareHistoryTried.delete(key)
+        studyFailures.delete(`compare-history:${key}`)
+        studyFailures.delete(`compare-subscribe:${key}`)
+        unsubscribeFeed(sub, 'compare')
       }
     })
   }
@@ -871,6 +930,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   /** Invalidate pending work before releasing subscriptions for a dataset change. */
   const resetStudyData = (): void => {
     studyEpoch++
+    studyFailures.clear()
     htfPending.clear()
     comparePending.clear()
     const subscriptions = [...htfSubs.values(), ...compareSubs.values()]
@@ -883,7 +943,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     if (compareRefreshTimer !== null) clearTimeout(compareRefreshTimer)
     compareRefreshTimer = null
     for (const sub of subscriptions) {
-      try { props.datafeed.unsubscribe(sub.symbol, sub.period, sub.callback) } catch {}
+      unsubscribeFeed(sub)
     }
   }
 
@@ -2343,7 +2403,13 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         void refreshCompares()
         return older.length > 0
       },
-      () => { if (current()) { chart.applyMoreData([], false); setHistoryPagingError(true) } },
+      cause => {
+        if (!current()) return
+        chart.applyMoreData([], false)
+        if (!current()) return
+        setHistoryPagingError(true)
+        reportDiagnostic({ code: 'history_failed', cause, symbol: selectedSymbol, period: selectedPeriod, scope: 'paging' }, current)
+      },
       { attempts: 3, delayMs: 250 }
     )
   }
@@ -2367,8 +2433,11 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       if (!followLive) restoreTimeViewport(chart, p, viewport)
       refreshDataDrawings()
       void refreshHtfIndicators(); void refreshCompares()
-    } catch {
-      if (current()) setRecoveryError(true)
+    } catch (cause) {
+      if (current()) {
+        setRecoveryError(true)
+        reportDiagnostic({ code: 'recovery_failed', cause, symbol: s, period: p }, () => widget === chart && reqId === job.request)
+      }
     } finally { if (recovering === job) recovering = null }
   }
 
@@ -2553,7 +2622,15 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     }
 
     // Feed capabilities (search filters, period fallback); optional.
-    props.datafeed.config?.().then(config => { setFeedConfig(config) }).catch(() => {})
+    if (props.datafeed.config) {
+      Promise.resolve().then(() => {
+        if (!disposed) return props.datafeed.config!()
+      }).then(config => {
+        if (disposed) return
+        if (!validDatafeedConfiguration(config)) throw new Error('config() returned an invalid DatafeedConfiguration')
+        setFeedConfig(config)
+      }).catch(cause => { reportDiagnostic({ code: 'configuration_failed', cause }) })
+    }
 
     // Restore builder-made intervals before the first period resolve so a
     // saved custom period (persisted per symbol) can re-declare itself to the
@@ -2652,9 +2729,20 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     const barSpace = read<{ barSpace?: unknown }>(VIEWPORT_KEY)?.barSpace
     if (typeof barSpace === 'number' && barSpace >= 1 && barSpace <= 50) widget?.setBarSpace(barSpace)
     releaseClipboard = drawingClipboard.subscribe(setClipboardAvailable)
-    releaseConnection = props.datafeed.subscribeConnection?.(event => {
-      if (event.status === 'reconnected' && (!event.exchange || event.exchange.toUpperCase() === untrack(symbol).exchange?.toUpperCase()) && (!event.symbol || symbolKey(event.symbol) === symbolKey(untrack(symbol)))) void recoverData()
-    })
+    try {
+      releaseConnection = props.datafeed.subscribeConnection?.(event => {
+        if (disposed) return
+        const selected = untrack(symbol), selectedPeriod = untrack(period)
+        if ((event.exchange && event.exchange.toUpperCase() !== selected.exchange?.toUpperCase()) || (event.symbol && symbolKey(event.symbol) !== symbolKey(selected))) return
+        const key = event.symbol ? symbolKey(event.symbol) : event.exchange?.toUpperCase() ?? '*'
+        if (event.status === 'disconnected' && !connectionOutages.has(key)) {
+          const marker = {}
+          connectionOutages.set(key, marker)
+          reportDiagnostic({ code: 'connection_lost', cause: event.cause ?? event, symbol: selected, period: selectedPeriod }, () => symbolKey(untrack(symbol)) === symbolKey(selected) && connectionOutages.get(key) === marker)
+        } else if (event.status !== 'disconnected') connectionOutages.delete(key)
+        if (event.status === 'reconnected') void recoverData()
+      })
+    } catch (cause) { reportDiagnostic({ code: 'subscription_failed', operation: 'subscribeConnection', cause, retryable: false }) }
     widget?.loadMore(() => { void loadOlderPage() })
     widget?.subscribeAction(ActionType.OnTooltipIconClick, (data) => {
       if (data.indicatorName) {
@@ -2707,7 +2795,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     pendingWorkspace?.reject(new Error('Chart disposed'))
     pendingWorkspace = null
     releaseClipboard?.()
-    releaseConnection?.()
+    try { releaseConnection?.() } catch (cause) { reportDiagnostic({ code: 'subscription_failed', operation: 'unsubscribe', cause, retryable: false }) }
     historyPager.reset()
     recovering = null
     resetRealtimeQueue()
@@ -2757,7 +2845,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     goingToHistory = null
     releaseMainSubscription()
     ;[...htfSubs.values(), ...compareSubs.values()].forEach(sub => {
-      props.datafeed.unsubscribe(sub.symbol, sub.period, sub.callback)
+      unsubscribeFeed(sub)
     })
     htfSubs.clear()
     compareSubs.clear()
@@ -2810,13 +2898,27 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     if (stored && stored.text !== current.text) setPeriod(stored)
   })
 
+  let unsupportedPeriodKey = ''
   // Snap the period when it is not supported by the resolved symbol/venue.
   createEffect(() => {
     const current = period()
     const periods = effectivePeriods()
-    if (periods.some(candidate => candidate.text === current.text)) return
-    const snapped = snapPeriod(current, periods)
+    const selectedSymbol = symbol()
+    const custom = customPeriods().some(candidate => candidate.multiplier === current.multiplier && candidate.timespan === current.timespan)
+    const declared = custom || [selectedSymbol.intervals, feedConfig()?.intervals].every(list => !list?.length || list.some(candidate => candidate.multiplier === current.multiplier && candidate.timespan === current.timespan))
+    const offered = periods.some(candidate => candidate.text === current.text)
+    const listed = periods.some(candidate => candidate.multiplier === current.multiplier && candidate.timespan === current.timespan)
+    if (offered && listed && declared) { unsupportedPeriodKey = ''; return }
+    const snapped = offered ? current : snapPeriod(current, periods)
     if (snapped && snapped.text !== current.text) setPeriod(snapped)
+    // Different display labels do not make the same numeric interval unsupported.
+    if (listed && declared) { unsupportedPeriodKey = ''; return }
+    const key = `${symbolKey(selectedSymbol)}|${current.multiplier}:${current.timespan}|${snapped?.text ?? ''}`
+    if (key === unsupportedPeriodKey) return
+    unsupportedPeriodKey = key
+    const generation = symbolResolveGeneration
+    reportDiagnostic({ code: 'unsupported_period', symbol: selectedSymbol, requestedPeriod: current, period: snapped ?? current },
+      () => generation === symbolResolveGeneration && symbol() === selectedSymbol && period().text === (snapped ?? current).text)
   })
 
   // 1s charts are trade-derived and always render as a line: entering a second
@@ -2851,7 +2953,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     if (mainSubscription === null) return
     const subscription = mainSubscription
     mainSubscription = null
-    props.datafeed.unsubscribe(subscription.symbol, subscription.period, subscription.callback)
+    unsubscribeFeed(subscription, 'main')
   }
 
   createEffect((prev?: PrevSymbolPeriod) => {
@@ -2874,6 +2976,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       setWorkspaceRestoring(false)
     }
     const id = ++reqId
+    if (connectionSymbol !== symbolKey(s)) { connectionOutages.clear(); connectionSymbol = symbolKey(s) }
     selectionRequests.bind(id)
     mainLoadError = undefined
     resetStudyData()
@@ -2924,18 +3027,19 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         if (disposed || id !== reqId) {
           // subscribe may reenter before registering its callback, after the new owner already unsubscribed it.
           if (mainSubscription === attemptedSubscription) mainSubscription = null
-          props.datafeed.unsubscribe(s, p, callback)
+          unsubscribeFeed(attemptedSubscription, 'main', () => id === reqId)
           return
         }
         setDataState(rawData.length > 0 ? 'ok' : 'empty')
       } catch (e) {
         if (attemptedSubscription) {
           if (mainSubscription === attemptedSubscription) mainSubscription = null
-          try { props.datafeed.unsubscribe(attemptedSubscription.symbol, attemptedSubscription.period, attemptedSubscription.callback) } catch {}
+          unsubscribeFeed(attemptedSubscription, 'main', () => id === reqId)
         }
         if (disposed || id !== reqId) return
         mainLoadError = new ChartSelectionError('load_failed', e)
         setDataState('error')
+        reportDiagnostic({ code: attemptedSubscription ? 'subscription_failed' : 'history_failed', cause: e, symbol: s, period: p, scope: 'main' }, () => id === reqId)
       }
       setLoadingVisible(false)
       // Initial paint can reach the left edge while the main request is still
@@ -3171,6 +3275,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
           recents={symbolRecents()}
           mode={symbolSearchMode()}
           onSearch={(query, filters) => props.datafeed.searchSymbols!(query, filters)}
+          onSearchError={(cause, current) => reportDiagnostic({ code: 'symbol_search_failed', cause }, current)}
           onSelect={result => {
             pushSymbolRecent(result)
             if (symbolSearchMode() === 'compare') {

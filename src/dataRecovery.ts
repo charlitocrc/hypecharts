@@ -3,7 +3,13 @@ import type { Datafeed, Period, SymbolInfo } from './types'
 import { normalizeHistory } from './historyPaging'
 import { periodDurationMs } from './symbolSelect'
 
-export interface ConnectionEvent { status: 'connected' | 'disconnected' | 'reconnected', symbol?: SymbolInfo, exchange?: string }
+export interface ConnectionEvent {
+  status: 'connected' | 'disconnected' | 'reconnected'
+  symbol?: SymbolInfo
+  exchange?: string
+  /** Optional original transport failure or close event for chart diagnostics. */
+  cause?: unknown
+}
 export class ConnectionEvents {
   private listeners = new Set<(event: ConnectionEvent) => void>()
   subscribe = (listener: (event: ConnectionEvent) => void): (() => void) => {

@@ -54,6 +54,7 @@ export type {
 }
 export type { ChartSelectionRequest, ChartSelectionOptions, ChartSelectionErrorCode } from './types'
 export { ChartSelectionError } from './selection'
+export type { ChartDiagnostic, ChartDiagnosticCode } from './types'
 export type { KLineData, Chart, Styles, DeepPartial, Nullable } from 'klinecharts'
 
 export { createWorkspaceStore, toChartWorkspace, toNamedWorkspace } from './workspace'

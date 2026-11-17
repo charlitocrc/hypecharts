@@ -24,7 +24,7 @@ export class HistoryPager {
   request (
     fetchPage: () => Promise<KLineData[]>,
     commit: (page: KLineData[]) => boolean,
-    onError: () => void,
+    onError: (cause: unknown) => void,
     retry: { attempts: number, delayMs: number } = { attempts: 1, delayMs: 0 }
   ): Promise<boolean> {
     if (this.pending) return this.pending
@@ -49,10 +49,10 @@ export class HistoryPager {
       // committing, or the engine can leave its loading flag stuck with no job.
       if (this.pending === job) this.pending = null
       return commit(page)
-    }).catch(() => {
+    }).catch(cause => {
       if (!current()) return false
       if (this.pending === job) this.pending = null
-      onError()
+      onError(cause)
       return false
     })
     this.pending = job

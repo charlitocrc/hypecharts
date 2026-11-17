@@ -29,6 +29,7 @@ export interface SymbolSearchModalProps {
   onSearch: (query: string, filters?: SymbolSearchFilters) => Promise<SymbolSearchResult[]>
   onSelect: (result: SymbolSearchResult) => void
   onClose: () => void
+  onSearchError?: (cause: unknown, current: () => boolean) => void
 }
 
 type SearchStatus = 'loading' | 'ok' | 'empty' | 'error'
@@ -81,19 +82,21 @@ const SymbolSearchModal: Component<SymbolSearchModalProps> = props => {
   const runSearch = (text: string, filters?: SymbolSearchFilters): void => {
     const seq = ++searchSeq
     setStatus('loading')
-    props.onSearch(text, filters).then(found => {
+    Promise.resolve().then(() => props.onSearch(text, filters)).then(found => {
       if (seq !== searchSeq) return
       setResults(found.map(rowOf))
       setStatus(found.length > 0 ? 'ok' : 'empty')
       setActiveIndex(0)
-    }).catch(() => {
+    }).catch(cause => {
       if (seq !== searchSeq) return
       setResults([])
       setStatus('error')
+      props.onSearchError?.(cause, () => seq === searchSeq)
     })
   }
 
   const scheduleSearch = (text: string): void => {
+    searchSeq++ // New intent invalidates the previous request even during debounce.
     if (debounceTimer) clearTimeout(debounceTimer)
     const filters: SymbolSearchFilters = {}
     if (exchangeFilter() !== '') filters.exchange = exchangeFilter()
@@ -109,7 +112,7 @@ const SymbolSearchModal: Component<SymbolSearchModalProps> = props => {
   }
 
   onMount(() => { inputRef?.focus() })
-  onCleanup(() => { if (debounceTimer) clearTimeout(debounceTimer) })
+  onCleanup(() => { searchSeq++; if (debounceTimer) clearTimeout(debounceTimer) })
 
   // Keep the keyboard-highlighted row visible while navigating.
   createEffect(() => {

@@ -390,10 +390,10 @@ export class HyperliquidDatafeed implements Datafeed {
       this.subs.get(key)?.forEach(listener => { listener({ ...bar }) })
     }
 
-    ws.onclose = () => {
+    ws.onclose = event => {
       if (this.ws !== ws) return
       this.stopPing()
-      this.connections.emit({ status: 'disconnected', exchange: HL_EXCHANGE })
+      this.connections.emit({ status: 'disconnected', exchange: HL_EXCHANGE, cause: event })
       if (this.destroyed || this.subs.size === 0) return
       this.reconnectTimer = setTimeout(() => this.connect(), 2000)
     }

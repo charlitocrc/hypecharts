@@ -149,6 +149,70 @@ commits, abort rejects the wait while the selected dataset continues loading; it
 not roll back the chart or cancel shared datafeed transport. Existing `setSymbol()` and
 `setPeriod()` signatures remain unchanged.
 
+### Diagnostics
+
+Provide `onDiagnostic` when constructing a chart to capture startup warnings and
+current-operation failures:
+
+```ts
+import { KLineChartPro, HyperliquidDatafeed } from 'hypecharts'
+import 'hypecharts/styles.css'
+
+const chart = new KLineChartPro({
+  container: 'chart',
+  locale: 'en-US',
+  timezone: 'Etc/UTC',
+  symbol: { ticker: 'BTC', exchange: 'HYPERLIQUID', market: 'perp' },
+  period: { multiplier: 15, timespan: 'minute', text: '15m' },
+  datafeed: new HyperliquidDatafeed(),
+  onDiagnostic(diagnostic) {
+    console.log(diagnostic.code, diagnostic.operation, diagnostic.scope)
+    console.log(diagnostic.symbol, diagnostic.period, diagnostic.retryable)
+    console.log(diagnostic.message, diagnostic.cause)
+  }
+})
+```
+
+`ChartDiagnostic` and `ChartDiagnosticCode` are exported types. Each event contains
+a stable code, severity, actionable message, operation, timestamp and retry support.
+Relevant events also include detached symbol/interval snapshots, a requested symbol
+name or interval, and the original error/transport event in `cause`. Handle codes
+rather than matching message text.
+
+| Code | Meaning / action |
+|---|---|
+| `container_not_found` | Create the container before constructing the chart; construction still throws. |
+| `stylesheet_missing` | Import `hypecharts/styles.css` before creating the chart. |
+| `container_zero_height` | Mount the chart in a visible layout with a nonzero height. |
+| `unsupported_period` | Inspect `requestedPeriod` and the effective `period`; configure compatible host/feed intervals. |
+| `configuration_failed` | Fix `datafeed.config()` or its return shape; host/symbol capability fallbacks remain available. |
+| `symbol_resolve_failed` | Check `symbolName` and the resolver; the existing selection is retained. |
+| `history_failed` | Inspect the cause and `scope`: main history, exhausted paging, indicator, compare or profile. |
+| `subscription_failed` | Inspect `operation` for subscribe, unsubscribe or connection-event setup failures. |
+| `connection_lost` | The matching feed reported a disconnect; inspect its reconnect policy. |
+| `recovery_failed` | Reconnect backfill failed; retry or reload the selection, checking retention/window limits. |
+| `symbol_search_failed` | Fix the provider/query/filter issue and search again. |
+
+Without a callback, the library uses structured `console.warn`/`console.error` output.
+A callback replaces that fallback; use `onDiagnostic: () => {}` to silence it. Delivery
+is deferred until state notifications settle, callback exceptions are isolated, and
+stale or disposed work is suppressed. There is no retained diagnostic log or replay.
+
+Layout/style warnings occur once per chart. History paging reports its final failure
+after retries. Study failures are deduplicated by current source until successful
+recovery or a dataset change; disconnect warnings are deduplicated until a matching
+connected/reconnected event. `retryable` means retrying the operation is supported,
+not that another attempt will succeed. Configuration, cleanup and cached profile
+fallback failures require fixing/reconfiguring the provider or changing the profile
+range/dataset, rather than blindly retrying the same call.
+Failed connection-event setup requires fixing the provider and recreating the chart;
+retrying a selection does not reinstall that listener.
+
+Selection promise errors and `onSymbolResolveError` remain available. Normal empty
+history, cancellation, supersession and disposal do not emit failure diagnostics.
+Diagnostics cover chart-visible failures and optional `subscribeConnection` events;
+they cannot reveal errors a custom feed or composite route catches internally.
+
 ### Contributing
 
 Bug reports, integration reports and PRs welcome. Use the setup and commands above, and

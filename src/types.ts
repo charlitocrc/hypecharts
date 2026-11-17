@@ -155,6 +155,31 @@ export interface ChartSelectionOptions {
 /** Terminal failure of an awaitable selection; available as ChartSelectionError.code. */
 export type ChartSelectionErrorCode = 'invalid_request' | 'resolve_failed' | 'load_failed' | 'aborted' | 'superseded' | 'disposed'
 
+export type ChartDiagnosticCode = 'container_not_found' | 'stylesheet_missing' | 'container_zero_height' |
+  'unsupported_period' | 'configuration_failed' | 'symbol_resolve_failed' | 'history_failed' |
+  'subscription_failed' | 'recovery_failed' | 'connection_lost' | 'symbol_search_failed'
+
+/** An asynchronous chart-local diagnostic. Normal empty data and selection cancellation are not errors. */
+export interface ChartDiagnostic {
+  readonly code: ChartDiagnosticCode
+  readonly severity: 'warning' | 'error'
+  /** Actionable description; use code, rather than message text, for application logic. */
+  readonly message: string
+  readonly operation: 'initialize' | 'config' | 'resolveSymbol' | 'getHistoryKLineData' | 'subscribe' |
+    'unsubscribe' | 'subscribeConnection' | 'recovery' | 'connection' | 'searchSymbols' | 'setPeriod'
+  /** Whether retrying the operation is supported, not a prediction that a retry will succeed. */
+  readonly retryable: boolean
+  readonly timestamp: number
+  /** Original provider error or transport event, preserved without wrapping or serializing it. */
+  readonly cause?: unknown
+  readonly symbol?: SymbolInfo
+  readonly period?: Period
+  readonly symbolName?: string
+  /** Effective period is in period when an unsupported requestedPeriod is snapped. */
+  readonly requestedPeriod?: Period
+  readonly scope?: 'main' | 'paging' | 'indicator' | 'compare' | 'profile'
+}
+
 /** Initial chart configuration. Saved chart preferences can override initial appearance settings. */
 export interface ChartProOptions {
   /** Existing element or element ID. The container must have a nonzero height. */
@@ -185,6 +210,12 @@ export interface ChartProOptions {
   datafeed: Datafeed
   /** Name resolution failed; the current symbol is retained. */
   onSymbolResolveError?: (error: SymbolResolveError) => void
+  /**
+   * Receive startup warnings and current-operation failures after chart state settles.
+   * Replaces console warning/error output; a no-op callback silences it. Exceptions are isolated.
+   * Stale/disposed work and normal selection abort/supersession do not emit diagnostics.
+   */
+  onDiagnostic?: (diagnostic: ChartDiagnostic) => void
 }
 
 /** Public chart handle implemented by KLineChartPro. Dispose it when the host unmounts. */

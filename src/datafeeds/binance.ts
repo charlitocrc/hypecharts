@@ -404,12 +404,12 @@ export class BinanceDatafeed implements Datafeed {
       this.subs.get(key)?.forEach(listener => { listener({ ...bar }) })
     }
 
-    ws.onclose = () => {
+    ws.onclose = event => {
       if (this.sockets.get(key) !== ws) return
       this.sockets.delete(key)
       if (this.destroyed || !this.subs.has(key)) return
       this.reconnecting.add(key)
-      this.connections.emit({ status: 'disconnected', symbol: this.subscriptionSymbols.get(key) })
+      this.connections.emit({ status: 'disconnected', symbol: this.subscriptionSymbols.get(key), cause: event })
       this.retries.set(key, setTimeout(() => this.connect(key), 2000))
     }
   }

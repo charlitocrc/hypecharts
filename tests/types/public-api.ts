@@ -4,7 +4,8 @@ import {
   type ChartPro, type ChartProOptions, type ChartSelection, type SymbolInfo,
   type Chart, type Styles, type DeepPartial, type Nullable, type Datafeed,
   type CompositeDatafeed, type ChartGrid, type ChartGridOptions, type ChartWorkspaceState,
-  type ChartSelectionRequest, type ChartSelectionOptions, type ChartSelectionErrorCode
+  type ChartSelectionRequest, type ChartSelectionOptions, type ChartSelectionErrorCode,
+  type ChartDiagnostic, type ChartDiagnosticCode
 } from 'hypecharts'
 import 'hypecharts/styles.css'
 
@@ -26,7 +27,17 @@ const feed: Datafeed = {
   unsubscribe () {}
 }
 const options: ChartProOptions = {
-  container: 'chart', symbol, period: { multiplier: 1, timespan: 'minute', text: '1m' }, datafeed: feed
+  container: 'chart', symbol, period: { multiplier: 1, timespan: 'minute', text: '1m' }, datafeed: feed,
+  onDiagnostic (diagnostic) {
+    const event: ChartDiagnostic = diagnostic
+    const code: ChartDiagnosticCode = event.code
+    const retryable: boolean = event.retryable
+    const cause: unknown = event.cause
+    // @ts-expect-error severity is a warning/error union
+    const severity: 'success' = event.severity
+    // @ts-expect-error diagnostic records are read-only
+    event.code = 'history_failed'
+  }
 }
 const instance = new KLineChartPro(options)
 const chart: ChartPro = instance

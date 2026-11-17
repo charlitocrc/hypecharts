@@ -87,11 +87,24 @@ describe('bounded profile history lifecycle', () => {
   })
 
   it('settles failed requests to chart fallback without repeat fetch loops', async () => {
-    const fetch = vi.fn(async () => { throw new Error('offline') })
+    const cause = new Error('offline'), onError = vi.fn()
+    const fetch = vi.fn(async () => { throw cause })
     const loader = new ProfileHistory()
     const feed = makeFeed(fetch)
-    expect(await loader.load(feed, { ticker: 'BTC' }, minute, 0, 300000)).toEqual([])
-    expect(await loader.load(feed, { ticker: 'BTC' }, minute, 0, 300000)).toEqual([])
+    expect(await loader.load(feed, { ticker: 'BTC' }, minute, 0, 300000, onError)).toEqual([])
+    expect(await loader.load(feed, { ticker: 'BTC' }, minute, 0, 300000, onError)).toEqual([])
     expect(fetch).toHaveBeenCalledTimes(1)
+    expect(onError).toHaveBeenCalledOnce()
+    expect(onError).toHaveBeenCalledWith(cause)
+  })
+
+  it('does not report a detail failure after its dataset is invalidated', async () => {
+    let reject!: (cause: Error) => void
+    const onError = vi.fn(), loader = new ProfileHistory()
+    const pending = loader.load(makeFeed(() => new Promise<KLineData[]>((_resolve, fail) => { reject = fail })), { ticker: 'BTC' }, minute, 0, 300000, onError)
+    loader.reset()
+    reject(new Error('obsolete profile failure'))
+    expect(await pending).toEqual([])
+    expect(onError).not.toHaveBeenCalled()
   })
 })

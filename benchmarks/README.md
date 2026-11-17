@@ -2,6 +2,18 @@
 
 Build the production library with `npm run build-core` before running a harness.
 
+## Developer diagnostics
+
+```sh
+node benchmarks/diagnostics.mjs
+```
+
+Uses Playwright Chromium or `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`. Fixtures cover
+CSS/container/interval warnings, configuration and subscription failures, original
+causes, stale/disposed request suppression, outage and exhausted-retry deduplication,
+study/profile/search errors, and diagnostic callback reentrancy/exception isolation.
+These are chart-visible provider fixtures; they do not establish live venue reliability.
+
 ## Awaitable selections
 
 ```sh

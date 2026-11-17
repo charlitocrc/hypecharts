@@ -20,18 +20,25 @@ import ChartProComponent, { type ChartProComponentApi } from './ChartProComponen
 
 import { SymbolInfo, Period, ChartPro, ChartProOptions, ChartSelection, ChartSelectionRequest, ChartSelectionOptions } from './types'
 import { ChartSelectionError } from './selection'
+import { DiagnosticReporter } from './diagnostics'
 
 /** Browser chart widget. Import hypecharts/styles.css and dispose the instance when its host unmounts. */
 export default class KLineChartPro implements ChartPro {
   /** Render into an existing container with a nonzero height. The host owns the supplied datafeed. */
   constructor (options: ChartProOptions) {
+    this._diagnostics = new DiagnosticReporter(options.onDiagnostic)
     if (utils.isString(options.container)) {
       this._container = document.getElementById(options.container as string)
       if (!this._container) {
-        throw new Error('Container is null')
+        this._diagnostics.report({ code: 'container_not_found' })
+        throw new Error(`Chart container '${options.container}' was not found. Create it before constructing the chart.`)
       }
     } else {
       this._container = options.container as HTMLElement
+    }
+    if (!this._container?.classList) {
+      this._diagnostics.report({ code: 'container_not_found' })
+      throw new Error('Chart container must be an existing element or its ID')
     }
     this._container.classList.add('klinecharts-pro')
     this._container.setAttribute('data-theme', options.theme ?? 'light')
@@ -72,10 +79,34 @@ export default class KLineChartPro implements ChartPro {
             }
           }}
           onSymbolResolveError={options.onSymbolResolveError}
+          reportDiagnostic={(diagnostic, current) => this._diagnostics.report(diagnostic, current)}
           datafeed={options.datafeed}/>
       ),
       this._container
     )
+    this._diagnosticObserver = new ResizeObserver(() => this._checkIntegration())
+    this._diagnosticObserver.observe(this._container)
+    this._checkIntegration()
+  }
+
+  private _diagnostics: DiagnosticReporter
+  private _diagnosticObserver: ResizeObserver | null = null
+  private _diagnosticFrame: number | null = null
+  private _integrationWarnings = new Set<string>()
+
+  private _checkIntegration (): void {
+    if (this._disposing || this._diagnosticFrame !== null) return
+    this._diagnosticFrame = requestAnimationFrame(() => {
+      this._diagnosticFrame = null
+      if (this._disposing || !this._container) return
+      const warn = (code: 'stylesheet_missing' | 'container_zero_height'): void => {
+        if (this._integrationWarnings.has(code)) return
+        this._integrationWarnings.add(code)
+        this._diagnostics.report({ code })
+      }
+      if (getComputedStyle(this._container).getPropertyValue('--hypecharts-css-ready').trim() !== '1') warn('stylesheet_missing')
+      if (this._container.getBoundingClientRect().height <= 0) warn('container_zero_height')
+    })
   }
 
   private _container: Nullable<HTMLElement>
@@ -132,6 +163,9 @@ export default class KLineChartPro implements ChartPro {
   dispose (): void {
     if (this._dispose === null || this._disposing) return
     this._disposing = true
+    this._diagnostics.stop()
+    this._diagnosticObserver?.disconnect()
+    if (this._diagnosticFrame !== null) cancelAnimationFrame(this._diagnosticFrame)
     const listeners = [...this._disposeListeners]
     this._disposeListeners.clear()
     this._selectionListeners.clear()

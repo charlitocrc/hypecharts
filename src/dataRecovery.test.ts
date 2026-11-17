@@ -25,6 +25,8 @@ describe('bounded recovery', () => {
     expect(await failed).toBe(false)
     expect(fail).toHaveBeenCalledTimes(3)
     expect(error).toHaveBeenCalledOnce()
+    expect(error.mock.calls[0][0]).toBeInstanceOf(Error)
+    expect(error.mock.calls[0][0].message).toBe('offline')
   })
   it('cancels a backoff on dataset change without dispatching again', async () => {
     vi.useFakeTimers()

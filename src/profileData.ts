@@ -77,7 +77,7 @@ export class ProfileHistory {
     for (const [key, entry] of this.cache) if (!entry.settled) this.cache.delete(key)
   }
 
-  load (feed: Datafeed, symbol: SymbolInfo, period: Period, from: number, to: number): Promise<KLineData[]> {
+  load (feed: Datafeed, symbol: SymbolInfo, period: Period, from: number, to: number, onError?: (cause: unknown) => void): Promise<KLineData[]> {
     const step = periodDurationMs(period)
     if (!(step > 0) || !Number.isFinite(from) || !Number.isFinite(to) || to <= from || Math.ceil((to - from) / step) > MAX_PROFILE_BARS) {
       return Promise.resolve([])
@@ -108,7 +108,7 @@ export class ProfileHistory {
     })()
     // Failed requests fall back. Retain the settled failure until the range changes;
     // dragging over the same range must not spin retry requests on every repaint.
-    const entry = { promise: job.catch(() => []), settled: false }
+    const entry = { promise: job.catch(cause => { if (epoch === this.epoch) onError?.(cause); return [] }), settled: false }
     entry.promise = entry.promise.then(bars => { entry.settled = true; return bars })
     this.cache.set(key, entry)
     if (this.cache.size > 4) this.cache.delete(this.cache.keys().next().value as string)
