@@ -134,13 +134,26 @@ export interface ChartSelection {
   symbol: SymbolInfo
   /** Effective interval after capability checks. */
   period: Period
-  /** True while loading market data or restoring a workspace. */
+  /** True while an awaited selection resolves its symbol, loads market data or restores a workspace. */
   loading: boolean
-  /** True when the current selection has loaded nonempty data and restoration has finished. */
+  /** True when awaited resolution, main loading and restoration have finished with nonempty data. */
   dataReady: boolean
   /** False for brick-based chart types that cannot participate in time synchronization. */
   timeBased: boolean
 }
+
+/** Select a symbol, an interval, or both. A paired request applies them together. */
+export type ChartSelectionRequest =
+  | { symbol: SymbolInfo | string, period?: Period }
+  | { symbol?: SymbolInfo | string, period: Period }
+
+export interface ChartSelectionOptions {
+  /** Reject the wait on abort. Before symbol resolution completes this also prevents the later commit. */
+  signal?: AbortSignal
+}
+
+/** Terminal failure of an awaitable selection; available as ChartSelectionError.code. */
+export type ChartSelectionErrorCode = 'invalid_request' | 'resolve_failed' | 'load_failed' | 'aborted' | 'superseded' | 'disposed'
 
 /** Initial chart configuration. Saved chart preferences can override initial appearance settings. */
 export interface ChartProOptions {
@@ -191,6 +204,13 @@ export interface ChartPro {
   subscribeSelectionChange(listener: (selection: ChartSelection) => void): () => void
   /** Observe disposal before component cleanup. Returns an unsubscribe function; after disposal it is a no-op. */
   subscribeDispose(listener: () => void): () => void
+  /**
+   * Apply a selection and load fresh initial history, even for an unchanged selection.
+   * Resolves with the effective selection after interval snapping; empty history resolves with dataReady false.
+   * Rejects with ChartSelectionError on failure, abort, supersession by another selection intent, or disposal.
+   * Abort after the selection commits stops the wait without rolling back or cancelling shared feed transport.
+   */
+  setSelection(request: ChartSelectionRequest, options?: ChartSelectionOptions): Promise<ChartSelection>
   /** Change the theme; built-ins are 'light' and 'dark'. */
   setTheme(theme: string): void
   /** Current theme key. */

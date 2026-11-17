@@ -2,6 +2,18 @@
 
 Build the production library with `npm run build-core` before running a harness.
 
+## Awaitable selections
+
+```sh
+node benchmarks/selection.mjs
+```
+
+Uses Playwright Chromium, or `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` for an installed
+executable. Controlled fixtures cover delayed resolution/history, exact request ownership,
+paired interval memory, snapping, empty history, synchronous/asynchronous failures,
+abort/disposal, API/UI/workspace supersession, and reentrant callbacks during rendering
+and subscription setup/cleanup. They do not validate live venues or reference-platform parity.
+
 ## Initial load
 
 ```sh

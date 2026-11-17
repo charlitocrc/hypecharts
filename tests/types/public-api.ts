@@ -1,9 +1,10 @@
 // Compile this against both the source entry point and the installed package.
 import {
-  KLineChartPro, createChartSyncGroup, createChartGrid, createCompositeDatafeed,
+  KLineChartPro, createChartSyncGroup, createChartGrid, createCompositeDatafeed, ChartSelectionError,
   type ChartPro, type ChartProOptions, type ChartSelection, type SymbolInfo,
   type Chart, type Styles, type DeepPartial, type Nullable, type Datafeed,
-  type CompositeDatafeed, type ChartGrid, type ChartGridOptions, type ChartWorkspaceState
+  type CompositeDatafeed, type ChartGrid, type ChartGridOptions, type ChartWorkspaceState,
+  type ChartSelectionRequest, type ChartSelectionOptions, type ChartSelectionErrorCode
 } from 'hypecharts'
 import 'hypecharts/styles.css'
 
@@ -44,9 +45,23 @@ const stopSelection: () => void = chart.subscribeSelectionChange(selection => {
 const stopDisposal: () => void = chart.subscribeDispose(() => {})
 const workspace: ChartWorkspaceState = chart.getWorkspace()
 const restored: Promise<void> = chart.applyWorkspace(workspace)
-// These setters still return immediately; awaitable operations are a separate API change.
+// Legacy setters still return immediately alongside the awaitable selection method.
 const symbolResult: void = chart.setSymbol(symbol)
 const periodResult: void = chart.setPeriod(options.period)
+const selectionRequest: ChartSelectionRequest = { symbol: 'TEST:ETH', period: options.period }
+const selectionOptions: ChartSelectionOptions = { signal: new AbortController().signal }
+const selected: Promise<ChartSelection> = chart.setSelection(selectionRequest, selectionOptions)
+selected.catch((error: unknown) => {
+  if (error instanceof ChartSelectionError) {
+    const code: ChartSelectionErrorCode = error.code
+    const cause: unknown = error.cause
+  }
+})
+chart.setSelection({ period: options.period })
+// @ts-expect-error at least one selection field is required
+chart.setSelection({})
+// @ts-expect-error cancellation uses AbortSignal
+chart.setSelection({ symbol }, { signal: 'cancel' })
 
 const group = createChartSyncGroup()
 group.add(chart)

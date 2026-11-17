@@ -18,7 +18,8 @@ import { utils, Nullable, DeepPartial, Styles, Chart } from 'klinecharts'
 
 import ChartProComponent, { type ChartProComponentApi } from './ChartProComponent'
 
-import { SymbolInfo, Period, ChartPro, ChartProOptions, ChartSelection } from './types'
+import { SymbolInfo, Period, ChartPro, ChartProOptions, ChartSelection, ChartSelectionRequest, ChartSelectionOptions } from './types'
+import { ChartSelectionError } from './selection'
 
 /** Browser chart widget. Import hypecharts/styles.css and dispose the instance when its host unmounts. */
 export default class KLineChartPro implements ChartPro {
@@ -114,6 +115,17 @@ export default class KLineChartPro implements ChartPro {
     if (this._disposing || this._dispose === null) return () => {}
     this._disposeListeners.add(listener)
     return () => { this._disposeListeners.delete(listener) }
+  }
+
+  /**
+   * Apply a selection and await fresh initial history, even when unchanged.
+   * Returns the effective interval after snapping; empty history resolves with dataReady false.
+   * Rejects with ChartSelectionError on failure, abort, supersession or disposal.
+   * Abort before symbol resolution prevents a late commit; after commit it stops only the wait.
+   */
+  setSelection (request: ChartSelectionRequest, options?: ChartSelectionOptions): Promise<ChartSelection> {
+    if (!this._chartApi || this._disposing) return Promise.reject(new ChartSelectionError('disposed'))
+    return this._chartApi.setSelection(request, options)
   }
 
   /** Release this chart and its listeners. Safe to call repeatedly; the host retains ownership of shared datafeeds. */

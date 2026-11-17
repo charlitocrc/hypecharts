@@ -103,6 +103,52 @@ factories that return interface-typed handles.
 `npm run test:types` checks the source API; `npm run test:package` checks the same
 consumer fixture against the packed ESM and CommonJS declarations.
 
+### Await a selection
+
+Use `setSelection` to change a symbol, an interval, or both, and wait for its initial
+history to finish. A paired request applies the symbol and interval together, with
+the explicit interval taking precedence over a remembered choice:
+
+```ts
+import { ChartSelectionError } from 'hypecharts'
+
+const controller = new AbortController()
+try {
+  const selected = await chart.setSelection({
+    symbol: 'HYPERLIQUID:ETH',
+    period: { multiplier: 15, timespan: 'minute', text: '15m' }
+  }, { signal: controller.signal })
+  console.log(selected.symbol, selected.period, selected.dataReady)
+} catch (error) {
+  if (error instanceof ChartSelectionError &&
+      (error.code === 'aborted' || error.code === 'superseded')) {
+    // The caller cancelled or a newer selection took over.
+  } else {
+    throw error
+  }
+}
+// controller.abort() cancels an outstanding wait.
+```
+
+Each call loads fresh initial history, including repeated selections. The promise
+returns the effective interval after capability checks and snapping. Empty history
+is a successful result with `loading: false` and `dataReady: false`; it does not wait
+for a live candle. `getSelection()` is updated before the promise resolves. Completion
+covers main-series history and subscription setup, not later study requests, ongoing
+connection health or future feed capability changes.
+
+`ChartSelectionError.code` distinguishes `invalid_request`, `resolve_failed`,
+`load_failed`, `aborted`, `superseded`, and `disposed`. Its `cause` preserves the
+original resolver/loading failure or abort reason. Invalid or already aborted requests
+leave another caller's pending operation intact.
+
+A newer selection request, legacy setter, symbol/interval UI action, or valid workspace
+restoration supersedes the pending wait. Disposal rejects it too. Aborting while a
+symbol is resolving prevents that result from committing later. After the selection
+commits, abort rejects the wait while the selected dataset continues loading; it does
+not roll back the chart or cancel shared datafeed transport. Existing `setSymbol()` and
+`setPeriod()` signatures remain unchanged.
+
 ### Contributing
 
 Bug reports, integration reports and PRs welcome. Use the setup and commands above, and

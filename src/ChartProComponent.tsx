@@ -86,7 +86,8 @@ import type { AggregatingDatafeed } from './datafeeds/aggregate'
 
 import i18n from './i18n'
 
-import { SymbolInfo, Period, ChartProOptions, ChartPro, DatafeedConfiguration, DatafeedSubscribeCallback, SymbolResolveError, SymbolSearchResult, ChartSelection } from './types'
+import { SymbolInfo, Period, ChartProOptions, ChartPro, DatafeedConfiguration, DatafeedSubscribeCallback, SymbolResolveError, SymbolSearchResult, ChartSelection, ChartSelectionRequest, ChartSelectionOptions } from './types'
+import { ChartSelectionError, SelectionRequests, isSelectionRequest } from './selection'
 
 /** Internal rendered API; the outer class owns lifecycle and selection subscriptions. */
 export type ChartProComponentApi = Omit<ChartPro, 'dispose' | 'getSelection' | 'subscribeSelectionChange' | 'subscribeDispose'>
@@ -233,6 +234,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   let recovering: { request: number, live: Set<number> } | null = null
   let releaseConnection: (() => void) | undefined
   let reqId = 0
+  let mainLoadError: ChartSelectionError | undefined
   let disposed = false
   let unbindShortcuts: Nullable<() => void> = null
 
@@ -242,6 +244,8 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
 
   const [symbol, setSymbol] = createSignal(props.symbol)
   const [period, setPeriod] = createSignal(props.period)
+  const [selectionResolving, setSelectionResolving] = createSignal(false)
+  const selectionRequests = new SelectionRequests(setSelectionResolving)
   const [indicatorModalVisible, setIndicatorModalVisible] = createSignal(false)
 
   const [feedConfig, setFeedConfig] = createSignal<DatafeedConfiguration | null>(null)
@@ -292,6 +296,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   /** setSymbol with the additive string overload: resolves through the datafeed. */
   let symbolResolveGeneration = 0
   const applySymbol = (input: SymbolInfo | string): void => {
+    selectionRequests.cancel('superseded')
     const generation = ++symbolResolveGeneration
     if (typeof input !== 'string') {
       setSymbol(input)
@@ -315,17 +320,68 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       })
       return
     }
-    resolve(name).then(info => {
+    Promise.resolve().then(() => resolve.call(props.datafeed, name)).then(info => {
       if (disposed || generation !== symbolResolveGeneration) return
       resolveCache.set(name, info)
       setSymbol(info)
     }).catch(error => {
       if (disposed || generation !== symbolResolveGeneration) return
-      props.onSymbolResolveError?.({
-        name,
-        code: error?.code === 'unknown_exchange' ? 'unknown_exchange' : 'unknown_symbol'
-      })
+      notifyResolveError(name, error)
     })
+  }
+
+  const notifyResolveError = (name: string, error: unknown): void => {
+    try {
+      props.onSymbolResolveError?.({ name, code: (error as { code?: string })?.code === 'unknown_exchange' ? 'unknown_exchange' : 'unknown_symbol' })
+    } catch (listenerError) { console.error('Chart symbol resolution listener failed', listenerError) }
+  }
+
+  const setSelection = (request: ChartSelectionRequest, options?: ChartSelectionOptions): Promise<ChartSelection> => {
+    if (disposed) return Promise.reject(new ChartSelectionError('disposed'))
+    if (!isSelectionRequest(request)) return Promise.reject(new ChartSelectionError('invalid_request'))
+    const operation = selectionRequests.begin(options?.signal)
+    if (!selectionRequests.current(operation)) return operation.promise
+    const generation = ++symbolResolveGeneration
+    pendingWorkspace?.reject(new Error('Workspace load interrupted by selection change'))
+    pendingWorkspace = null
+    setWorkspaceRestoring(false)
+    const current = (): boolean => !disposed && generation === symbolResolveGeneration && selectionRequests.current(operation)
+    const select = async (): Promise<void> => {
+      let nextSymbol = untrack(symbol)
+      try {
+        const input = request.symbol
+        if (typeof input === 'string') {
+          const cached = resolveCache.get(input)
+          if (cached) nextSymbol = cached
+          else if (props.datafeed.resolveSymbol) nextSymbol = await props.datafeed.resolveSymbol(input)
+          else {
+            const parsed = parseSymbolName(input)
+            nextSymbol = { ...nextSymbol, ticker: parsed.ticker, ...(parsed.exchange === undefined ? {} : { exchange: parsed.exchange }) }
+          }
+          if (!current()) return
+          if (!nextSymbol || typeof nextSymbol.ticker !== 'string' || !nextSymbol.ticker.trim()) throw new Error('Datafeed returned invalid symbol metadata')
+          resolveCache.set(input, nextSymbol)
+        } else if (input !== undefined) nextSymbol = input
+      } catch (cause) {
+        if (!current()) return
+        selectionRequests.fail(operation, new ChartSelectionError('resolve_failed', cause))
+        if (typeof request.symbol === 'string') notifyResolveError(request.symbol, cause)
+        return
+      }
+      if (!current()) return
+      try {
+        batch(() => {
+          selectionRequests.activate(operation)
+          if (request.symbol !== undefined) setSymbol(nextSymbol)
+          // The paired period is persisted against the target symbol before memory/snap effects flush.
+          if (request.period !== undefined) commitPeriod(request.period)
+          // An unchanged selection must still own a new dataset request.
+          setRetryTick(tick => tick + 1)
+        })
+      } catch (cause) { selectionRequests.fail(operation, new ChartSelectionError('load_failed', cause)) }
+    }
+    void select()
+    return operation.promise
   }
 
   // A string constructor symbol resolves through the feed exactly like
@@ -354,6 +410,11 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
 
   /** Period selection from the UI: also remembered per symbol (SQ-4). */
   const changePeriod = (next: Period): void => {
+    selectionRequests.cancel('superseded')
+    commitPeriod(next)
+  }
+
+  const commitPeriod = (next: Period): void => {
     // Persist BEFORE updating the signal: the period-memory effect below runs
     // on the signal flush and reads this map — writing first keeps what it
     // reads in sync with the click.
@@ -1379,6 +1440,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   }
 
   props.ref({
+    setSelection,
     setTheme,
     getTheme: () => theme(),
     setStyles,
@@ -1705,6 +1767,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   const applyWorkspace = (value: ChartWorkspaceState): Promise<void> => {
     const state = toChartWorkspace(value)
     if (!state || disposed) return Promise.reject(new Error('Invalid workspace or disposed chart'))
+    selectionRequests.cancel('superseded')
     pendingWorkspace?.reject(new Error('Workspace load superseded'))
     return new Promise((resolve, reject) => {
       pendingWorkspace = { state, resolve, reject }
@@ -2634,6 +2697,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   })
 
   onCleanup(() => {
+    selectionRequests.cancel('disposed')
     resizeObserver?.disconnect()
     resizeObserver = null
     if (countdownTimer) {
@@ -2785,8 +2849,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   let mainSubscription: FeedSubscription | null = null
   const releaseMainSubscription = (): void => {
     if (mainSubscription === null) return
-    props.datafeed.unsubscribe(mainSubscription.symbol, mainSubscription.period, mainSubscription.callback)
+    const subscription = mainSubscription
     mainSubscription = null
+    props.datafeed.unsubscribe(subscription.symbol, subscription.period, subscription.callback)
   }
 
   createEffect((prev?: PrevSymbolPeriod) => {
@@ -2809,6 +2874,8 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       setWorkspaceRestoring(false)
     }
     const id = ++reqId
+    selectionRequests.bind(id)
+    mainLoadError = undefined
     resetStudyData()
     historyPager.reset()
     setHistoryPagingError(false)
@@ -2828,6 +2895,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     setLoadingVisible(true)
     const get = async () => {
       const [from, to] = adjustFromTo(p, new Date().getTime(), isBrickType(untrack(candleType)) ? 2000 : 500)
+      let attemptedSubscription: FeedSubscription | null = null
       try {
         const kLineDataList = await props.datafeed.getHistoryKLineData(s, p, from, to)
         if (id !== reqId) {
@@ -2835,6 +2903,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         }
         rawData = normalizeHistory(kLineDataList)
         presentData()
+        if (disposed || id !== reqId) return
         if (symbolKey(s) !== restoredTicker) {
           restoredTicker = symbolKey(s)
           restoreDrawings(restoredTicker, s.ticker)
@@ -2843,24 +2912,36 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         }
         void refreshHtfIndicators()
         void refreshCompares()
+        if (disposed || id !== reqId) return
         const callback: DatafeedSubscribeCallback = data => {
           if (disposed || id !== reqId || !validHistoryCandle(data)) return
           applyRealtimeBar(data)
           refreshDataDrawings()
         }
-        mainSubscription = { symbol: s, period: p, callback }
+        attemptedSubscription = { symbol: s, period: p, callback }
+        mainSubscription = attemptedSubscription
         props.datafeed.subscribe(s, p, callback)
-        setDataState(rawData.length > 0 ? 'ok' : 'empty')
-      } catch (e) {
-        if (id !== reqId) {
+        if (disposed || id !== reqId) {
+          // subscribe may reenter before registering its callback, after the new owner already unsubscribed it.
+          if (mainSubscription === attemptedSubscription) mainSubscription = null
+          props.datafeed.unsubscribe(s, p, callback)
           return
         }
+        setDataState(rawData.length > 0 ? 'ok' : 'empty')
+      } catch (e) {
+        if (attemptedSubscription) {
+          if (mainSubscription === attemptedSubscription) mainSubscription = null
+          try { props.datafeed.unsubscribe(attemptedSubscription.symbol, attemptedSubscription.period, attemptedSubscription.callback) } catch {}
+        }
+        if (disposed || id !== reqId) return
+        mainLoadError = new ChartSelectionError('load_failed', e)
         setDataState('error')
       }
       setLoadingVisible(false)
       // Initial paint can reach the left edge while the main request is still
       // marked loading. Re-arm core paging once this dataset is actually ready.
       if (dataState() !== 'error') widget?.applyMoreData([], rawData.length > 0 && !isBrickType(untrack(candleType)))
+      if (disposed || id !== reqId) return
       syncChartActionsWidth()
       if (pendingWorkspace) {
         if (dataState() === 'error') { pendingWorkspace.reject(new Error('Workspace market data could not load')); pendingWorkspace = null; setWorkspaceRestoring(false) }
@@ -2873,17 +2954,24 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
 
   let selectionNotificationQueued = false
   createEffect(() => {
-    void [symbol(), period(), loadingVisible(), workspaceRestoring(), dataState(), candleType()]
+    void [symbol(), period(), selectionResolving(), loadingVisible(), workspaceRestoring(), dataState(), candleType()]
     if (selectionNotificationQueued) return
     selectionNotificationQueued = true
     queueMicrotask(() => {
       selectionNotificationQueued = false
       if (disposed) return
-      untrack(() => props.onSelectionChange?.({
-        symbol: symbol(), period: period(), loading: loadingVisible() || workspaceRestoring(),
-        dataReady: !loadingVisible() && !workspaceRestoring() && dataState() === 'ok' && (widget?.getDataList().length ?? 0) > 0,
-        timeBased: !isBrickType(candleType())
-      }))
+      untrack(() => {
+        const request = reqId
+        const error = mainLoadError
+        const selection: ChartSelection = {
+          symbol: symbol(), period: period(), loading: selectionResolving() || loadingVisible() || workspaceRestoring(),
+          dataReady: !selectionResolving() && !loadingVisible() && !workspaceRestoring() && dataState() === 'ok' && (widget?.getDataList().length ?? 0) > 0,
+          timeBased: !isBrickType(candleType())
+        }
+        props.onSelectionChange?.(selection)
+        // User callbacks can replace the request or dispose the chart synchronously.
+        if (!disposed && request === reqId) selectionRequests.complete(request, selection, error)
+      })
     })
   })
 

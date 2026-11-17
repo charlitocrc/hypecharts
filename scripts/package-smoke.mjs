@@ -149,7 +149,12 @@ try {
       })
       return window.selectionEvents.length
     }), 0, `${format}: subscriptions must not replay the current state`)
-    await page.evaluate(() => window.chart.setSymbol({ ticker: 'ETH', exchange: 'FIXTURE' }))
+    await page.evaluate(async () => {
+      const selected = await window.chart.setSelection({ symbol: { ticker: 'ETH', exchange: 'FIXTURE' } })
+      if (!selected.dataReady || selected.loading || window.chart.getSelection().symbol.ticker !== 'ETH') {
+        throw new Error('Awaitable selection must resolve after its current state is published')
+      }
+    })
     await page.waitForFunction(() => window.chart.getSelection()?.dataReady && window.chart.getSelection().symbol.ticker === 'ETH')
     assert.equal(await page.evaluate(() => window.chart.getChart().getDataList().length), 100)
     assert.ok(await page.evaluate(() => window.chart.getChart().getDataList().every(bar => bar.close === 201)))
