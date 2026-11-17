@@ -12,9 +12,11 @@
  * limitations under the License.
  */
 
-import { KLineData, Styles, DeepPartial, Nullable, Chart } from 'klinecharts'
+import type { KLineData, Styles, DeepPartial, Nullable, Chart } from 'klinecharts'
 
+/** Venue-qualified symbol metadata supplied by a datafeed or host application. */
 export interface SymbolInfo {
+  /** Canonical datafeed key, for example BTC or BTCUSDT. */
   ticker: string
   name?: string
   shortName?: string
@@ -26,9 +28,9 @@ export interface SymbolInfo {
   type?: string
   logo?: string
   description?: string
-  /** TV-style session, e.g. '24x7' — consumed by the session display work. */
+  /** Session metadata, for example '24x7'; does not configure exchange-session calculations. */
   session?: string
-  /** IANA timezone, e.g. 'Etc/UTC' — display-timezone default for the symbol. */
+  /** Symbol timezone metadata; set ChartProOptions.timezone to configure the display. */
   timezone?: string
   /** Periods this symbol supports; the period bar intersects these with the feed config and host options. */
   intervals?: Period[]
@@ -37,12 +39,17 @@ export interface SymbolInfo {
   dataStatus?: 'streaming' | 'delayed' | 'snapshot'
 }
 
+/** An interval. Use parsePeriodText to build supported custom intervals from text. */
 export interface Period {
+  /** Number of timespan units in one bar; use a positive integer. */
   multiplier: number
+  /** Unit such as second, minute, hour, day, week, month or year; availability depends on the feed. */
   timespan: string
+  /** Display/selection key, for example '15m'; keep it consistent with the interval. */
   text: string
 }
 
+/** Receives a live candle with a bar-open timestamp in milliseconds. */
 export type DatafeedSubscribeCallback = (data: KLineData) => void
 
 export interface DatafeedExchange {
@@ -97,66 +104,123 @@ export interface SymbolResolveError {
   code: SymbolResolveErrorCode
 }
 
+/** History and live market data. A feed may be shared by multiple charts and studies. */
 export interface Datafeed {
   /** Optional transport lifecycle; charts repair missed candles after reconnect. */
   subscribeConnection?: (listener: (event: import('./dataRecovery').ConnectionEvent) => void) => () => void
-  /** Week bars must open Monday 00:00 UTC and month bars on the 1st at 00:00 UTC. */
+  /**
+   * Return chronological candles for the requested range. Bounds and bar-open timestamps are milliseconds.
+   * Week bars open Monday 00:00 UTC; month bars open on the 1st at 00:00 UTC.
+   * Reject on failure; return an empty array when no history is available.
+   */
   getHistoryKLineData (symbol: SymbolInfo, period: Period, from: number, to: number): Promise<KLineData[]>
+  /** Register this live listener; preserve other listeners for the same symbol and period. */
   subscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void
   /** Removes only this listener: a symbol and period can have several at once. */
   unsubscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void
   /** Chart capabilities: exchange list, filters, period fallback, search availability. Called once per chart lifetime. */
   config? (): Promise<DatafeedConfiguration>
+  /** Search advertised symbols, optionally filtered by exchange/type and limited in count. */
   searchSymbols? (query: string, filters?: SymbolSearchFilters): Promise<SymbolSearchResult[]>
   /** Resolves any user-facing name the feed advertises ('BINANCE:BTCUSDT', 'BTCUSDT') to a full SymbolInfo. */
   resolveSymbol? (name: string): Promise<SymbolInfo>
-  /** Optional capability; consumed by the bar-close-countdown milestone. */
+  /** Optional venue clock capability; the current countdown uses the client clock. */
   getServerTime? (): Promise<number>
 }
 
-/** A settled chart selection; loading/ready distinguish old data from the requested dataset. */
+/** Latest selection/loading state; dataReady distinguishes new data from a previous dataset. */
 export interface ChartSelection {
+  /** Effective symbol; a pending string resolution retains the previous symbol. */
   symbol: SymbolInfo
+  /** Effective interval after capability checks. */
   period: Period
+  /** True while loading market data or restoring a workspace. */
   loading: boolean
+  /** True when the current selection has loaded nonempty data and restoration has finished. */
   dataReady: boolean
+  /** False for brick-based chart types that cannot participate in time synchronization. */
   timeBased: boolean
 }
 
+/** Initial chart configuration. Saved chart preferences can override initial appearance settings. */
 export interface ChartProOptions {
+  /** Existing element or element ID. The container must have a nonzero height. */
   container: string | HTMLElement
+  /** Partial overrides for the bundled chart core's styles. */
   styles?: DeepPartial<Styles>
+  /** Initial theme; built-ins are 'light' and 'dark'. @defaultValue 'light' */
   theme?: string
+  /** Initial locale; built-ins are 'en-US' and 'zh-CN'. @defaultValue 'zh-CN' */
   locale?: string
+  /** Show the drawing toolbar. @defaultValue true */
   drawingBarVisible?: boolean
+  /** Initial resolved symbol metadata. Use setSymbol for later name resolution. */
   symbol: SymbolInfo
+  /** Initial interval, subject to symbol/feed capabilities. */
   period: Period
+  /** Available intervals, intersected with the symbol/feed's supported intervals. */
   periods?: Period[]
+  /** Pinned interval text keys. @defaultValue ['15m', '1h', '4h'] */
   quickPeriods?: string[]
+  /** Initial IANA display timezone. @defaultValue 'Asia/Shanghai' */
   timezone?: string
+  /** Initial main-pane indicator names. @defaultValue ['MA'] */
   mainIndicators?: string[]
+  /** Initial sub-pane indicator names. @defaultValue ['VOL'] */
   subIndicators?: string[]
+  /** History/live provider. The host owns its lifetime, including when shared across charts. */
   datafeed: Datafeed
-  /** Fired when a name passed to setSymbol cannot be resolved; the chart keeps the current symbol. */
+  /** Name resolution failed; the current symbol is retained. */
   onSymbolResolveError?: (error: SymbolResolveError) => void
 }
 
+/** Public chart handle implemented by KLineChartPro. Dispose it when the host unmounts. */
 export interface ChartPro {
+  /** Capture a serializable workspace. Throws while loading/restoring, after a data failure or after disposal. */
   getWorkspace(): import('./workspace').ChartWorkspaceState
+  /** Restore a workspace; resolves after data/state restoration and rejects on invalid state, failure or interruption. */
   applyWorkspace(state: import('./workspace').ChartWorkspaceState): Promise<void>
+  /** Release the chart and its listeners. Safe to call repeatedly; shared datafeeds remain host-owned. */
+  dispose(): void
+  /** Latest notified selection, or null before the first notification and after disposal. */
+  getSelection(): ChartSelection | null
+  /**
+   * Observe future selection/loading changes, including UI changes. Does not replay the current state.
+   * Read getSelection for the current state. Returns an unsubscribe function; after disposal it is a no-op.
+   */
+  subscribeSelectionChange(listener: (selection: ChartSelection) => void): () => void
+  /** Observe disposal before component cleanup. Returns an unsubscribe function; after disposal it is a no-op. */
+  subscribeDispose(listener: () => void): () => void
+  /** Change the theme; built-ins are 'light' and 'dark'. */
   setTheme(theme: string): void
+  /** Current theme key. */
   getTheme(): string
+  /** Apply partial style overrides to the bundled core. */
   setStyles(styles: DeepPartial<Styles>): void
+  /** Current resolved core styles. */
   getStyles(): Styles
+  /** Change the locale; use loadLocales to register additional dictionaries. */
   setLocale(locale: string): void
+  /** Current locale key. */
   getLocale(): string
+  /** Change the IANA display timezone, for example 'Etc/UTC'. */
   setTimezone(timezone: string): void
+  /** Current display timezone key. */
   getTimezone(): string
+  /**
+   * Select resolved metadata or a name such as 'BINANCE:BTCUSDT'. Name resolution is asynchronous
+   * when the feed supplies resolveSymbol; otherwise ticker/exchange are derived from the name.
+   * Returns immediately. Observe selection/loading changes with subscribeSelectionChange.
+   */
   setSymbol(symbol: SymbolInfo | string): void
+  /** Current effective symbol; retains the previous symbol while a name is resolving. */
   getSymbol(): SymbolInfo
-  /** The effective (resolved) symbol — what legends and the symbol-info read model render. */
+  /** Current effective symbol, as returned by getSymbol. */
   resolvedSymbol(): SymbolInfo
+  /** Select an interval; unsupported intervals can snap to an available one. Data loads asynchronously. */
   setPeriod(period: Period): void
+  /** Current effective interval. */
   getPeriod(): Period
+  /** Bundled core chart, or null before core initialization and after disposal. */
   getChart(): Nullable<Chart>
 }

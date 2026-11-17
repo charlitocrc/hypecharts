@@ -52,6 +52,7 @@
   "scripts": {
     "demo": "vite --config vite.config.demo.ts --force",
     "test": "vitest run --environment node",
+    "test:types": "tsc --project tests/types/tsconfig.json",
     "build-core": "tsc && vite build",
     "build-dts": "dts-bundle-generator --no-banner true --umd-module-name klinechartspro -o dist/index.d.ts src/index.ts && node scripts/package-types.mjs",
     "build": "npm run build-core && npm run build-dts",

@@ -16,11 +16,13 @@ import { render } from 'solid-js/web'
 
 import { utils, Nullable, DeepPartial, Styles, Chart } from 'klinecharts'
 
-import ChartProComponent from './ChartProComponent'
+import ChartProComponent, { type ChartProComponentApi } from './ChartProComponent'
 
 import { SymbolInfo, Period, ChartPro, ChartProOptions, ChartSelection } from './types'
 
+/** Browser chart widget. Import hypecharts/styles.css and dispose the instance when its host unmounts. */
 export default class KLineChartPro implements ChartPro {
+  /** Render into an existing container with a nonzero height. The host owns the supplied datafeed. */
   constructor (options: ChartProOptions) {
     if (utils.isString(options.container)) {
       this._container = document.getElementById(options.container as string)
@@ -36,7 +38,7 @@ export default class KLineChartPro implements ChartPro {
     this._dispose = render(
       () => (
         <ChartProComponent
-          ref={(chart: ChartPro) => { this._chartApi = chart }}
+          ref={(chart: ChartProComponentApi) => { this._chartApi = chart }}
           styles={options.styles ?? {}}
           theme={options.theme ?? 'light'}
           locale={options.locale ?? 'zh-CN'}
@@ -77,7 +79,7 @@ export default class KLineChartPro implements ChartPro {
 
   private _container: Nullable<HTMLElement>
 
-  private _chartApi: Nullable<ChartPro> = null
+  private _chartApi: Nullable<ChartProComponentApi> = null
 
   private _dispose: Nullable<() => void> = null
 
@@ -86,29 +88,35 @@ export default class KLineChartPro implements ChartPro {
   private _disposeListeners = new Set<() => void>()
   private _disposing = false
 
+  /** Capture a serializable workspace; throws while loading/restoring, after a data failure or disposal. */
   getWorkspace (): import('./workspace').ChartWorkspaceState {
     if (!this._chartApi || this._disposing) throw new Error('Chart is disposed')
     return this._chartApi.getWorkspace()
   }
+  /** Restore a workspace; resolves after restoration and rejects on invalid state, failure or interruption. */
   applyWorkspace (state: import('./workspace').ChartWorkspaceState): Promise<void> {
     if (!this._chartApi || this._disposing) return Promise.reject(new Error('Chart is disposed'))
     return this._chartApi.applyWorkspace(state)
   }
 
+  /** Latest notified selection, or null before the first notification and after disposal. */
   getSelection (): ChartSelection | null { return this._selection }
 
+  /** Observe future selection/loading changes without replay. Read getSelection for current state. Returns an unsubscribe function. */
   subscribeSelectionChange (listener: (selection: ChartSelection) => void): () => void {
     if (this._disposing || this._dispose === null) return () => {}
     this._selectionListeners.add(listener)
     return () => { this._selectionListeners.delete(listener) }
   }
 
+  /** Observe disposal before component cleanup. Returns an unsubscribe function; subscribing after disposal is a no-op. */
   subscribeDispose (listener: () => void): () => void {
     if (this._disposing || this._dispose === null) return () => {}
     this._disposeListeners.add(listener)
     return () => { this._disposeListeners.delete(listener) }
   }
 
+  /** Release this chart and its listeners. Safe to call repeatedly; the host retains ownership of shared datafeeds. */
   dispose (): void {
     if (this._dispose === null || this._disposing) return
     this._disposing = true
@@ -130,59 +138,73 @@ export default class KLineChartPro implements ChartPro {
     }
   }
 
+  /** Change the theme; built-ins are 'light' and 'dark'. */
   setTheme (theme: string): void {
     this._container?.setAttribute('data-theme', theme)
     this._chartApi!.setTheme(theme)
   }
 
+  /** Current theme key. */
   getTheme (): string {
     return this._chartApi!.getTheme()
   }
 
+  /** Apply partial style overrides to the bundled chart core. */
   setStyles(styles: DeepPartial<Styles>): void {
     this._chartApi!.setStyles(styles)
   }
 
+  /** Current resolved core styles. */
   getStyles(): Styles {
     return this._chartApi!.getStyles()
   }
 
+  /** Change the locale; use loadLocales to register additional dictionaries. */
   setLocale (locale: string): void {
     this._chartApi!.setLocale(locale)
   }
 
+  /** Current locale key. */
   getLocale (): string {
     return this._chartApi!.getLocale()
   }
 
+  /** Change the IANA display timezone, for example 'Etc/UTC'. */
   setTimezone (timezone: string): void {
     this._chartApi!.setTimezone(timezone)
   }
 
+  /** Current display timezone key. */
   getTimezone (): string {
     return this._chartApi!.getTimezone()
   }
 
+  /** Select metadata or resolve a name through the feed. Returns immediately; observe completion with subscribeSelectionChange. */
   setSymbol (symbol: SymbolInfo | string): void {
     this._chartApi!.setSymbol(symbol)
   }
 
+  /** Current effective symbol; retains the previous symbol while a name is resolving. */
   getSymbol (): SymbolInfo {
     return this._chartApi!.getSymbol()
   }
 
+  /** Current effective symbol, as returned by getSymbol. */
   resolvedSymbol (): SymbolInfo {
     return this._chartApi!.resolvedSymbol()
   }
 
+  /** Select an interval; unsupported intervals can snap to an available one. Data loads asynchronously. */
   setPeriod (period: Period): void {
     this._chartApi!.setPeriod(period)
   }
 
+  /** Current effective interval. */
   getPeriod (): Period {
     return this._chartApi!.getPeriod()
   }
 
+  /** Bundled core chart, or null before core initialization and after disposal. */
   getChart (): Nullable<Chart> {
     return this._chartApi?.getChart() ?? null
   }

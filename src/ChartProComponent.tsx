@@ -88,8 +88,11 @@ import i18n from './i18n'
 
 import { SymbolInfo, Period, ChartProOptions, ChartPro, DatafeedConfiguration, DatafeedSubscribeCallback, SymbolResolveError, SymbolSearchResult, ChartSelection } from './types'
 
+/** Internal rendered API; the outer class owns lifecycle and selection subscriptions. */
+export type ChartProComponentApi = Omit<ChartPro, 'dispose' | 'getSelection' | 'subscribeSelectionChange' | 'subscribeDispose'>
+
 export interface ChartProComponentProps extends Required<Omit<ChartProOptions, 'container' | 'onSymbolResolveError'>> {
-  ref: (chart: ChartPro) => void
+  ref: (chart: ChartProComponentApi) => void
   onSymbolResolveError?: (error: SymbolResolveError) => void
   onSelectionChange?: (selection: ChartSelection) => void
 }

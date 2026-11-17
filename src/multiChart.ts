@@ -14,7 +14,7 @@
 
 import { ActionType, DomPosition, type KLineData } from 'klinecharts'
 import type KLineChartPro from './KLineChartPro'
-import type { ChartSelection, Period } from './types'
+import type { ChartPro, ChartSelection, Period } from './types'
 import { chartTimeAtIndex, chartIndexAtTime, containingChartIndex } from './multiChartTime'
 import { constrainChartRange } from './chartViewport'
 import { gridDimension, gridWeights, resizeGridPair, type ChartGridSizes } from './gridSizing'
@@ -33,7 +33,7 @@ interface ChartStoreInternals {
   getTimeScaleStore (): TimeScaleInternals
   getCrosshairStore (): { set (crosshair: { x?: number, paneId?: string }): unknown }
 }
-const internalsOf = (chart: KLineChartPro): ChartStoreInternals | null =>
+const internalsOf = (chart: ChartPro): ChartStoreInternals | null =>
   (chart.getChart() as unknown as { getChartStore?: () => ChartStoreInternals } | null)?.getChartStore?.() ?? null
 
 export interface ChartSyncGroupOptions {
@@ -47,8 +47,10 @@ export interface ChartSyncGroupOptions {
   period?: boolean
 }
 export interface ChartSyncGroup {
-  add (chart: KLineChartPro): void
-  remove (chart: KLineChartPro): void
+  /** Add a public chart handle; adding the same handle again has no effect. */
+  add (chart: ChartPro): void
+  /** Remove a member and its synchronization listeners without disposing the chart. */
+  remove (chart: ChartPro): void
   getOptions (): Required<ChartSyncGroupOptions>
   setOptions (options: ChartSyncGroupOptions): void
   destroy (): void
@@ -66,7 +68,7 @@ interface Geometry {
   count: number
 }
 interface GroupMember {
-  chart: KLineChartPro
+  chart: ChartPro
   active: boolean
   applying: boolean
   pendingSelection: boolean
@@ -232,7 +234,7 @@ export function createChartSyncGroup (options: ChartSyncGroupOptions = {}): Char
       else onRange(member)
     }
   }
-  const remove = (chart: KLineChartPro): void => {
+  const remove = (chart: ChartPro): void => {
     const index = members.findIndex(member => member.chart === chart)
     if (index < 0) return
     const [member] = members.splice(index, 1)
@@ -295,9 +297,11 @@ export function createChartSyncGroup (options: ChartSyncGroupOptions = {}): Char
   }
 }
 
-export interface ChartGridOptions {
+/** Grid configuration; the factory's return type determines the type of grid.charts. */
+export interface ChartGridOptions<TChart extends ChartPro = KLineChartPro> {
   container: HTMLElement
-  createChart: (cell: HTMLElement, index: number, cellOptions: { timeAxisVisible: boolean }) => KLineChartPro
+  /** Create a chart for each cell; the grid disposes these charts when rebuilding or destroying. */
+  createChart: (cell: HTMLElement, index: number, cellOptions: { timeAxisVisible: boolean }) => TChart
   columns?: number
   gap?: number
   sync?: boolean | ChartSyncGroupOptions
@@ -310,8 +314,9 @@ export interface ChartGridOptions {
   /** Called after pointer/keyboard/programmatic size commits. Storage belongs to the host. */
   onResize?: (sizes: ChartGridSizes) => void
 }
-export interface ChartGrid {
-  charts: KLineChartPro[]
+/** A grid retaining the factory's concrete, subclass or interface chart type. */
+export interface ChartGrid<TChart extends ChartPro = KLineChartPro> {
+  charts: TChart[]
   cells: HTMLElement[]
   syncGroup: ChartSyncGroup | null
   setLayout (charts: number, columns?: number): void
@@ -320,10 +325,11 @@ export interface ChartGrid {
   destroy (): void
 }
 
-export function createChartGrid (options: ChartGridOptions): ChartGrid {
+/** Create an empty grid. Call setLayout to populate it with charts from the factory. */
+export function createChartGrid<TChart extends ChartPro = KLineChartPro> (options: ChartGridOptions<TChart>): ChartGrid<TChart> {
   const container = options.container
   const doc = container.ownerDocument
-  let charts: KLineChartPro[] = []
+  let charts: TChart[] = []
   let cells: HTMLElement[] = []
   let syncGroup: ChartSyncGroup | null = null
   let count = 0

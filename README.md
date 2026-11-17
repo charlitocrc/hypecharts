@@ -17,6 +17,7 @@ Other scripts:
 | Script | What it does |
 |---|---|
 | `npm test` | Unit + regression suite (vitest) |
+| `npm run test:types` | Check the public TypeScript API against the source entry point |
 | `npm run build` | Library build (ESM/CJS/UMD + bundled core + TypeScript declarations) |
 | `npm run test:package` | Pack, install offline, type-check and run standalone browser consumers (requires Playwright Chromium) |
 | `npm run docs:dev` | Docs site (vitepress) |
@@ -68,6 +69,39 @@ ESM/CommonJS consumers, and verifies production browser bundles and the legacy U
 script with fixture data. Install the test browser with `npx playwright install chromium`
 or set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an existing Chromium executable.
 These checks validate packaging and basic integration, not live exchange behavior.
+
+### TypeScript integration
+
+Use `ChartPro` when passing a chart between application components. It includes the
+same public methods as `KLineChartPro`, including selection subscriptions and disposal:
+
+```ts
+import type { ChartPro, DeepPartial, Styles } from 'hypecharts'
+
+function connectChart(chart: ChartPro) {
+  const styles: DeepPartial<Styles> = { grid: { show: false } }
+  chart.setStyles(styles)
+  const stop = chart.subscribeSelectionChange(selection => {
+    console.log(selection.symbol.ticker, selection.loading, selection.dataReady)
+  })
+  // Subscriptions receive future changes; read getSelection() for the current state.
+  console.log(chart.getSelection())
+  return stop
+}
+```
+
+Remove subscriptions when their consumer unmounts, and call `chart.dispose()` when the
+chart's host unmounts. The host owns shared datafeeds. `setSymbol()` and `setPeriod()`
+return immediately; selection notifications report loading and data readiness.
+
+Core types `Chart`, `Styles`, `DeepPartial`, `Nullable` and `KLineData`, plus
+`CompositeDatafeed`, are available from `hypecharts` without a separate core dependency.
+Synchronization groups accept `ChartPro` handles. Grids infer the factory's chart type,
+including subclasses; `ChartGrid<ChartPro>` and `ChartGridOptions<ChartPro>` support
+factories that return interface-typed handles.
+
+`npm run test:types` checks the source API; `npm run test:package` checks the same
+consumer fixture against the packed ESM and CommonJS declarations.
 
 ### Contributing
 

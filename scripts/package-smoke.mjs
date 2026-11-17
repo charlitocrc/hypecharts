@@ -89,18 +89,7 @@ try {
   assert.equal(await readFile(join(installed, 'dist/index.d.cts'), 'utf8'), esmTypes)
   assert.ok(!/^\s*(?:import|export).*\bfrom\s+['"]/m.test(esmTypes), 'declarations must be self-contained')
 
-  const typeFixture = `import { KLineChartPro, HyperliquidDatafeed, type ChartProOptions, type SymbolInfo } from 'hypecharts';
-import 'hypecharts/styles.css';
-const symbol: SymbolInfo = { ticker: 'BTC' };
-const options: ChartProOptions = { container: 'chart', symbol, period: { multiplier: 1, timespan: 'minute', text: '1m' }, datafeed: new HyperliquidDatafeed() };
-const chart = new KLineChartPro(options);
-chart.setSymbol(symbol);
-chart.dispose();
-// @ts-expect-error ticker must be a string
-const invalid: SymbolInfo = { ticker: 123 };
-// @ts-expect-error unknown method must not silently type-check
-chart.noSuchMethod();
-`
+  const typeFixture = await readFile(join(repo, 'tests/types/public-api.ts'), 'utf8')
   await write(join(consumer, 'esm.mts'), typeFixture)
   await write(join(consumer, 'commonjs.cts'), typeFixture)
   await write(join(consumer, 'tsconfig.json'), JSON.stringify({
@@ -150,11 +139,32 @@ chart.noSuchMethod();
     assert.ok(await page.locator('#chart canvas').count() > 0, `${format}: chart must render canvases`)
     assert.equal(await page.locator('#chart').evaluate(el => getComputedStyle(el).position), 'relative', `${format}: stylesheet must apply`)
     assert.equal(await page.evaluate(() => window.listenerCount()), 1)
+    assert.equal(await page.evaluate(() => {
+      window.selectionEvents = []
+      window.disposalEvents = 0
+      window.stopSelection = window.chart.subscribeSelectionChange(selection => window.selectionEvents.push(selection))
+      window.chart.subscribeDispose(() => {
+        window.disposalEvents++
+        window.corePresentAtDisposal = window.chart.getChart() !== null
+      })
+      return window.selectionEvents.length
+    }), 0, `${format}: subscriptions must not replay the current state`)
     await page.evaluate(() => window.chart.setSymbol({ ticker: 'ETH', exchange: 'FIXTURE' }))
     await page.waitForFunction(() => window.chart.getSelection()?.dataReady && window.chart.getSelection().symbol.ticker === 'ETH')
     assert.equal(await page.evaluate(() => window.chart.getChart().getDataList().length), 100)
     assert.ok(await page.evaluate(() => window.chart.getChart().getDataList().every(bar => bar.close === 201)))
+    assert.ok(await page.evaluate(() => window.selectionEvents.some(selection => selection.symbol.ticker === 'ETH' && selection.dataReady)))
     await page.evaluate(() => { window.chart.dispose(); window.chart.dispose() })
+    assert.equal(await page.evaluate(() => window.disposalEvents), 1)
+    assert.equal(await page.evaluate(() => window.corePresentAtDisposal), true)
+    assert.equal(await page.evaluate(() => window.chart.getSelection()), null)
+    assert.equal(await page.evaluate(() => {
+      window.stopSelection()
+      const stop = window.chart.subscribeDispose(() => window.disposalEvents++)
+      stop()
+      window.chart.subscribeSelectionChange(() => window.selectionEvents.push('unexpected'))()
+      return window.disposalEvents
+    }), 1)
     assert.equal(await page.evaluate(() => window.listenerCount()), 0)
     assert.equal(await page.locator('#chart canvas').count(), 0)
     assert.deepEqual(errors, [], `${format}: browser errors`)

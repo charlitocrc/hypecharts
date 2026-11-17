@@ -52,7 +52,7 @@ export type {
   DatafeedConfiguration, DatafeedExchange, DatafeedSymbolType, SymbolSearchFilters,
   SymbolSearchResult, SymbolResolveError, SymbolResolveErrorCode
 }
-export type { KLineData } from 'klinecharts'
+export type { KLineData, Chart, Styles, DeepPartial, Nullable } from 'klinecharts'
 
 export { createWorkspaceStore, toChartWorkspace, toNamedWorkspace } from './workspace'
 export type { ChartWorkspaceState, NamedWorkspace } from './workspace'
