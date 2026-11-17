@@ -217,6 +217,8 @@ export interface StoredPoint {
 }
 
 export interface StoredDrawing {
+  /** User-facing object group; separate from the engine ownership groupId. */
+  objectGroup?: string
   name: string
   points: StoredPoint[]
   styles?: any
@@ -506,13 +508,13 @@ export function toStoredDrawing (overlay: any, groupId: string): StoredDrawing |
       return null
     }
     const stored: StoredPoint = {}
-    if (typeof point.timestamp === 'number') {
+    if (typeof point.timestamp === 'number' && Number.isFinite(point.timestamp)) {
       stored.timestamp = point.timestamp
-    } else if (typeof point.dataIndex === 'number') {
+    } else if (typeof point.dataIndex === 'number' && Number.isFinite(point.dataIndex)) {
       // Future-space points have no candle timestamp yet.
       stored.dataIndex = point.dataIndex
     }
-    if (typeof point.value === 'number') {
+    if (typeof point.value === 'number' && Number.isFinite(point.value)) {
       stored.value = point.value
     }
     if (stored.timestamp === undefined && stored.dataIndex === undefined && stored.value === undefined) {
@@ -526,6 +528,7 @@ export function toStoredDrawing (overlay: any, groupId: string): StoredDrawing |
   return {
     name: overlay.name,
     points,
+    objectGroup: typeof overlay.objectGroup === 'string' && overlay.objectGroup.trim() ? overlay.objectGroup.trim().slice(0, 80) : undefined,
     styles: overlay.styles ?? undefined,
     lock: overlay.lock ?? false,
     visible: overlay.visible,

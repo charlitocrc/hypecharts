@@ -81,6 +81,8 @@ export interface ShortcutHandlers {
   onScroll: (direction: number) => void
   onZoom: (direction: number) => void
   onSearch?: () => void
+  onCopy?: () => boolean
+  onPaste?: () => boolean
 }
 
 function isTypingTarget (target: EventTarget | null): boolean {
@@ -144,6 +146,11 @@ export function bindShortcuts (handlers: ShortcutHandlers): () => void {
     if (e.ctrlKey || e.metaKey) {
       if (handlers.isBlocked() || e.altKey) return
       const lower = key.toLowerCase()
+      if (lower === 'c' || lower === 'v') {
+        const handled = lower === 'c' ? handlers.onCopy?.() : handlers.onPaste?.()
+        if (handled) { e.preventDefault(); clearBuffer() }
+        return
+      }
       const action = lower === 'z' ? (e.shiftKey ? handlers.onRedo : handlers.onUndo)
         : lower === 'y' ? handlers.onRedo
         : lower === 'k' ? handlers.onSearch : undefined

@@ -86,6 +86,15 @@ export default class KLineChartPro implements ChartPro {
   private _disposeListeners = new Set<() => void>()
   private _disposing = false
 
+  getWorkspace (): import('./workspace').ChartWorkspaceState {
+    if (!this._chartApi || this._disposing) throw new Error('Chart is disposed')
+    return this._chartApi.getWorkspace()
+  }
+  applyWorkspace (state: import('./workspace').ChartWorkspaceState): Promise<void> {
+    if (!this._chartApi || this._disposing) return Promise.reject(new Error('Chart is disposed'))
+    return this._chartApi.applyWorkspace(state)
+  }
+
   getSelection (): ChartSelection | null { return this._selection }
 
   subscribeSelectionChange (listener: (selection: ChartSelection) => void): () => void {

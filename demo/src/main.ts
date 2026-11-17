@@ -1,5 +1,8 @@
-import { createChartGrid, KLineChartPro } from '../../src'
-import type { ChartGrid, ChartSyncGroup, ChartGridSizes } from '../../src'
+import { render } from 'solid-js/web'
+import { createComponent } from 'solid-js'
+import WorkspaceModal from '../../src/widget/workspace-modal'
+import { createChartGrid, createWorkspaceStore, KLineChartPro } from '../../src'
+import type { ChartGrid, ChartSyncGroup, ChartGridSizes, ChartWorkspaceState, NamedWorkspace } from '../../src'
 import type { Period, SymbolInfo } from '../../src/types'
 import { createDemoFeed } from './datafeed'
 import './style.css'
@@ -86,7 +89,7 @@ let splitLayout = false
 // WORK-002: the workspace persists per cell — which symbol and period each
 // grid pane shows — so a reload puts the split back the way it was left.
 const WORKSPACE_KEY = 'hypecharts-demo:workspace-v1'
-interface SavedCell { symbol?: string, period?: string }
+interface SavedCell { symbol?: string, period?: string, state?: ChartWorkspaceState }
 interface SavedWorkspace { layout: 'single' | 'split', cells: SavedCell[], sizes?: Partial<ChartGridSizes>, links?: { symbol: boolean, period: boolean } }
 
 const readWorkspace = (): SavedWorkspace | null => {
@@ -102,13 +105,16 @@ const readWorkspace = (): SavedWorkspace | null => {
 }
 
 let lastSavedWorkspace = ''
+let restoringNamedWorkspace = false
+let mountEpoch = 0
 const saveWorkspace = (): void => {
+  if (restoringNamedWorkspace) return
   try {
     const workspace: SavedWorkspace = {
       layout: splitLayout ? 'split' : 'single',
       sizes: grid?.getSizes(),
       links: { symbol: syncGroup?.getOptions().symbol ?? false, period: syncGroup?.getOptions().period ?? false },
-      cells: charts.map(chart => {
+      cells: charts.map((chart, index) => {
         // Mid-rebuild (or disposed) instances have no live API — persist
         // nothing for them rather than throwing.
         if (!chart.getChart()) return {}
@@ -118,10 +124,16 @@ const saveWorkspace = (): void => {
         const symbol = resolved?.exchange && resolved?.ticker
           ? `${resolved.exchange}:${resolved.ticker}`
           : undefined
-        return {
-          symbol,
-          period: chart.getPeriod().text
-        }
+        const period = chart.getPeriod().text
+        const previous = readWorkspace()?.cells[index]?.state
+        let state: ChartWorkspaceState | undefined
+        // Selection notifications are queued; never let a stale cell snapshot
+        // replace a newly resolved venue or interval during a quick grid switch.
+        try { if (chart.getSelection()?.dataReady) state = chart.getWorkspace() } catch {}
+        const matches = (candidate?: ChartWorkspaceState): boolean => !!candidate &&
+          `${candidate.symbol.exchange}:${candidate.symbol.ticker}` === symbol && candidate.period.text === period
+        if (!matches(state)) state = matches(previous) ? previous : undefined
+        return { symbol, period, state }
       })
     }
     const serialized = JSON.stringify(workspace)
@@ -275,7 +287,7 @@ async function main (): Promise<void> {
   if (savedOnMount?.layout === 'split') splitLayout = true
   syncGroup = null
   charts = []
-  const mountCharts = (): void => {
+  const mountCharts = (named?: NamedWorkspace): Promise<void> => {
     // A resolved selection may be newer than the timer's last persisted record.
     // Flush before reading saved targets; otherwise a quick layout switch can
     // replace the user's latest venue with that older saved symbol.
@@ -286,13 +298,21 @@ async function main (): Promise<void> {
     grid?.destroy()
     grid = null
     charts = []
-    const saved = readWorkspace()
+    const saved: SavedWorkspace | null = named ? {
+      layout: named.charts.length > 1 ? 'split' : 'single',
+      cells: named.charts.map(state => ({ symbol: `${state.symbol.exchange}:${state.symbol.ticker}`, period: state.period.text, state })),
+      sizes: named.grid.sizes, links: named.grid.links
+    } : readWorkspace()
+    const epoch = ++mountEpoch
+    const states = saved?.cells.map(cell => cell.state) ?? []
+    const restoring = states.some(Boolean)
     const container = el<HTMLDivElement>('chart')
     container.classList.toggle('split', splitLayout)
 
     const asset = ASSETS[activeAssetIndex]
     const venues = VENUES.filter(candidate => candidate.integrated && liveVenues.has(candidate.key))
-    const primary = activeVenue.integrated && liveVenues.has(activeVenue.key) ? activeVenue : venues[0] ?? INITIAL_VENUE
+    const primary = venues.find(venue => venue.key === previous?.exchange?.toUpperCase()) ??
+      (activeVenue.integrated && liveVenues.has(activeVenue.key) ? activeVenue : venues[0] ?? INITIAL_VENUE)
     const defaultSpecFor = (index: number): SymbolInfo | string => {
       if (splitLayout && venues.length > 1) {
         if (index === 0) return previous ?? primary.nameFor(asset)
@@ -305,7 +325,7 @@ async function main (): Promise<void> {
       container,
       columns: 1,
       gap: 4,
-      sync: { symbol: saved?.links?.symbol === true, period: saved?.links?.period === true },
+      sync: { symbol: !restoring && saved?.links?.symbol === true, period: !restoring && saved?.links?.period === true, range: !restoring, crosshair: !restoring },
       resizable: true,
       sizes: saved?.sizes,
       onResize: () => saveWorkspace(),
@@ -314,16 +334,16 @@ async function main (): Promise<void> {
         // The constructor gets a fully-formed SymbolInfo (strings resolve only
         // through setSymbol); the venue-specific target then goes through
         // setSymbol, which resolves qualified names through the feed.
-        const chart = createChart(cell, index === 0 ? (previous ?? initialSymbol) : initialSymbol, periodFor(index), timeAxisVisible)
+        const chart = createChart(cell, states[index]?.symbol ?? (index === 0 ? (previous ?? initialSymbol) : initialSymbol), periodFor(index), timeAxisVisible)
         const savedSymbol = saved?.cells[index]?.symbol
         // Resolve one target. Starting the default and saved symbols together
         // lets a slower default resolution overwrite the restored selection.
         const target = savedSymbol !== undefined && !savedSymbol.includes('undefined') ? savedSymbol : defaultSpecFor(index)
-        if (target !== chart.getSymbol()) chart.setSymbol(target)
+        if (!states[index] && target !== chart.getSymbol()) chart.setSymbol(target)
         return chart
       }
     })
-    grid.setLayout(splitLayout ? 2 : 1)
+    grid.setLayout(named?.charts.length ?? (splitLayout ? 2 : 1), named?.grid.columns ?? 1)
     charts = grid.charts
     syncGroup = grid.syncGroup
     el<HTMLElement>('chart-links').hidden = !splitLayout
@@ -331,10 +351,20 @@ async function main (): Promise<void> {
     el<HTMLInputElement>('link-period').checked = syncGroup?.getOptions().period ?? false
     // Dev/testing hook: refresh on every mount so it never holds disposed charts.
     ;(window as unknown as { __hypecharts: KLineChartPro[] }).__hypecharts = charts
-    saveWorkspace()
+    const finish = async (): Promise<void> => {
+      const restoringCharts = charts.slice()
+      await Promise.all(restoringCharts.map(async (chart, index) => { if (states[index]) await chart.applyWorkspace(states[index]!) }))
+      if (epoch !== mountEpoch) return
+      syncGroup?.setOptions({ symbol: saved?.links?.symbol === true, period: saved?.links?.period === true, range: named?.grid.links?.range !== false, crosshair: named?.grid.links?.crosshair !== false })
+      el<HTMLInputElement>('link-symbol').checked = syncGroup?.getOptions().symbol ?? false
+      el<HTMLInputElement>('link-period').checked = syncGroup?.getOptions().period ?? false
+      restoringNamedWorkspace = false
+      saveWorkspace()
+    }
+    return finish()
   }
 
-  mountCharts()
+  await mountCharts()
   el<HTMLButtonElement>('layout-toggle').textContent = splitLayout ? '⊟ Single' : '◱ Split'
 
   el<HTMLButtonElement>('layout-toggle').addEventListener('click', () => {
@@ -345,7 +375,7 @@ async function main (): Promise<void> {
     }
     splitLayout = !splitLayout
     el<HTMLButtonElement>('layout-toggle').textContent = splitLayout ? '⊟ Single' : '◱ Split'
-    mountCharts()
+    void mountCharts().catch(error => { restoringNamedWorkspace = false; setStatus(String(error), 'error') })
   })
 
   for (const [id, key] of [['link-symbol', 'symbol'], ['link-period', 'period']] as const) {
@@ -354,6 +384,37 @@ async function main (): Promise<void> {
       saveWorkspace()
     })
   }
+
+  const namedStore = createWorkspaceStore('hypecharts-demo:named-workspaces:v1')
+  el<HTMLButtonElement>('workspace-manager').addEventListener('click', () => {
+    const host = document.createElement('div')
+    host.className = 'klinecharts-pro'
+    host.dataset.theme = currentTheme
+    host.style.cssText = 'position:fixed;inset:0;z-index:1000;'
+    document.body.appendChild(host)
+    let dispose: (() => void) | undefined
+    const close = (): void => { dispose?.(); host.remove() }
+    dispose = render(() => createComponent(WorkspaceModal, {
+      locale: 'en-US', store: namedStore,
+      capture: () => charts.map(chart => chart.getWorkspace()),
+      grid: () => ({ columns: 1, sizes: grid?.getSizes(), links: {
+        symbol: syncGroup?.getOptions().symbol ?? false, period: syncGroup?.getOptions().period ?? false,
+        range: syncGroup?.getOptions().range ?? true, crosshair: syncGroup?.getOptions().crosshair ?? true
+      } }),
+      load: async workspace => {
+        saveWorkspace()
+        restoringNamedWorkspace = true
+        splitLayout = workspace.charts.length > 1
+        try {
+          await mountCharts(workspace)
+          currentTheme = workspace.charts[0].theme
+          document.body.dataset.theme = currentTheme
+          el<HTMLButtonElement>('layout-toggle').textContent = splitLayout ? '⊟ Single' : '◱ Split'
+        } finally { restoringNamedWorkspace = false }
+      },
+      onClose: close
+    }), host)
+  })
 
   el<HTMLButtonElement>('theme-toggle').addEventListener('click', () => {
     const toLight = currentTheme === 'dark'

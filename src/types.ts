@@ -98,6 +98,8 @@ export interface SymbolResolveError {
 }
 
 export interface Datafeed {
+  /** Optional transport lifecycle; charts repair missed candles after reconnect. */
+  subscribeConnection?: (listener: (event: import('./dataRecovery').ConnectionEvent) => void) => () => void
   /** Week bars must open Monday 00:00 UTC and month bars on the 1st at 00:00 UTC. */
   getHistoryKLineData (symbol: SymbolInfo, period: Period, from: number, to: number): Promise<KLineData[]>
   subscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void
@@ -140,6 +142,8 @@ export interface ChartProOptions {
 }
 
 export interface ChartPro {
+  getWorkspace(): import('./workspace').ChartWorkspaceState
+  applyWorkspace(state: import('./workspace').ChartWorkspaceState): Promise<void>
   setTheme(theme: string): void
   getTheme(): string
   setStyles(styles: DeepPartial<Styles>): void

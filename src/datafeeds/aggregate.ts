@@ -160,6 +160,7 @@ export function createAggregatingDatafeed (base: Datafeed, options: AggregatingD
   }
 
   const feed: AggregatingDatafeed = {
+    subscribeConnection: listener => base.subscribeConnection?.(listener) ?? (() => {}),
     async getHistoryKLineData (symbol, period, from, to): Promise<KLineData[]> {
       if (!isNative(period)) {
         await intervalsLoaded()

@@ -48,6 +48,7 @@ export interface PeriodBarProps {
   redoTitle: string
   onUndo: () => void
   onRedo: () => void
+  onWorkspaces: () => void
   onObjects: () => void
   objectsVisible: boolean
 }
@@ -365,6 +366,9 @@ const PeriodBar: Component<PeriodBarProps> = props => {
             <path d="M16.5 7.5H8a4.5 4.5 0 0 0 0 9h4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
           </svg>
         </button>
+      <button type="button" class="layers-button" aria-label={i18n('workspaces', props.locale)} title={i18n('workspaces', props.locale)} onClick={props.onWorkspaces}>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 4h6l2 2h8v11H2Z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+      </button>
         <button type="button" class="layers-button" aria-label={i18n('layers', props.locale)} title={i18n('layers', props.locale)} aria-expanded={props.objectsVisible} onClick={props.onObjects}>
           <svg viewBox="0 0 20 20" aria-hidden="true">
             <path d="M10 2.5 2 6.5l8 4 8-4-8-4Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>

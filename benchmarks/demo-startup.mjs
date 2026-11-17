@@ -88,8 +88,43 @@ try {
   assert.equal(await page.locator('#link-period').isChecked(), true)
   const restoredSizes = await page.evaluate(() => JSON.parse(localStorage.getItem('hypecharts-demo:workspace-v1')).sizes)
   assert.deepEqual(restoredSizes, resized.sizes)
+  // Complete named grid snapshots retain per-cell studies/drawings as well as links and geometry.
+  await page.waitForFunction(()=>window.__hypecharts.every(chart=>chart.getSelection()?.dataReady))
+  await page.evaluate(async()=>{
+    await Promise.all(window.__hypecharts.map(async(chart,index)=>{
+      const state=chart.getWorkspace()
+      state.indicators={main:[{name:'EMA',calcParams:[index?21:9]}],sub:[{name:'VOL',pane:'shared',height:100},{name:'RSI',pane:'shared',height:100}]}
+      state.drawings=[{name:'horizontalStraightLine',points:[{value:101+index}],objectGroup:index?'Secondary':'Primary'}]
+      await chart.applyWorkspace(state)
+    }))
+  })
+  await page.locator('#workspace-manager').click()
+  let namedDialog=page.locator('.klinecharts-pro-workspace-modal')
+  await namedDialog.getByLabel('Workspace name',{exact:true}).fill('Two venues')
+  await namedDialog.getByRole('button',{name:'Save new',exact:true}).click()
+  const named=await page.evaluate(()=>JSON.parse(localStorage.getItem('hypecharts-demo:named-workspaces:v1'))[0])
+  assert.equal(named.charts.length,2)
+  assert.equal(named.grid.links.period,true)
+  await namedDialog.getByRole('button',{name:'Close',exact:true}).click()
+  await page.locator('#layout-toggle').click()
+  await page.waitForFunction(()=>window.__hypecharts.length===1&&window.__hypecharts[0].getSelection()?.dataReady)
+  await page.locator('#workspace-manager').click()
+  namedDialog=page.locator('.klinecharts-pro-workspace-modal')
+  await namedDialog.getByLabel('Saved workspaces',{exact:true}).selectOption(named.id)
+  await namedDialog.getByRole('button',{name:'Load',exact:true}).click()
+  await namedDialog.waitFor({state:'detached'})
+  await page.waitForFunction(()=>window.__hypecharts.length===2&&window.__hypecharts.every(chart=>chart.getSelection()?.dataReady))
+  assert.deepEqual(await page.evaluate(()=>window.__hypecharts.map(chart=>({params:chart.getWorkspace().indicators.main[0].calcParams,group:chart.getWorkspace().drawings[0].objectGroup,panes:chart.getChart().getPaneOrder().length}))),[
+    {params:[9],group:'Primary',panes:1},{params:[21],group:'Secondary',panes:1}
+  ])
+  assert.equal(await page.locator('#link-period').isChecked(),true)
+  await page.waitForTimeout(1100)
+  await page.reload({waitUntil:'domcontentloaded'})
+  await page.waitForFunction(()=>window.__hypecharts?.length===2&&window.__hypecharts.every(chart=>chart.getSelection()?.dataReady))
+  assert.deepEqual(await page.evaluate(()=>window.__hypecharts.map(chart=>chart.getWorkspace().drawings[0]?.objectGroup)),['Primary','Secondary'])
+  await page.screenshot({path:'/tmp/hypecharts-named-grid.png'})
   assert.deepEqual(errors, [])
   console.log(JSON.stringify({ readyMs, secondaryProbeDelayMs: delayMs,
-    verified: ['primary renders before secondary probe', 'indicator menu opens', 'late venue switch', 'split layout', 'saved split restoration', 'keyboard divider resize', 'size/link-flag restoration'],
+    verified: ['primary renders before secondary probe', 'indicator menu opens', 'late venue switch', 'split layout', 'saved split restoration', 'keyboard divider resize', 'size/link-flag restoration', 'named complete grid save/load', 'independent cell content and reload'],
     limitations: 'Single localhost fixture run; readiness is a paint opportunity, not actual compositor presentation or live connectivity.' }, null, 2))
 } finally { await browser.close() }

@@ -10,6 +10,7 @@ import {
 import type { LevelStyle } from '../../extension/fibLevels'
 import { POSITION_TOOLS, riskOf } from '../../extension/position'
 import { readDrawingPresets, writeDrawingPresets } from '../../persist'
+import { drawingGroups } from '../../drawingObjects'
 import type { StoredDrawingPreset } from '../../persist'
 import {
   DrawingItem, DrawingStyleDraft, LineStyle, drawingLabel, drawingStyleSections, fromUserStyles, parsePoints, pointDrafts, withLevelAwareStyles
@@ -18,6 +19,15 @@ import {
 interface ManagerProps {
   locale: string
   drawings: DrawingItem[]
+  selected: string[]
+  canPaste: boolean
+  onSelect: (id: string, additive: boolean) => void
+  onSelectGroup: (ids: string[], checked: boolean) => void
+  onGroup: (name: string | undefined) => void
+  onBulk: (action: 'delete' | 'duplicate' | 'show' | 'hide' | 'lock' | 'unlock') => void
+  onReorder: (direction: -1 | 1) => void
+  onCopy: () => void
+  onPaste: () => void
   onEdit: (drawing: DrawingItem) => void
   onToggle: (id: string, field: 'visible' | 'lock') => void
   onDuplicate: (id: string) => void
@@ -27,24 +37,53 @@ interface ManagerProps {
 
 export const DrawingManager: Component<ManagerProps> = props => {
   const t = (key: string) => i18n(key, props.locale)
+  const [groupName, setGroupName] = createSignal('')
   return <aside class="klinecharts-pro-drawing-manager" aria-label={t('drawing_objects')}>
     <div class="manager-heading"><strong>{t('drawing_objects')} ({props.drawings.length})</strong>
       <button type="button" aria-label={t('close')} onClick={props.onClose}>×</button>
     </div>
+    <div class="object-toolbar">
+      <button type="button" disabled={!props.selected.length} onClick={props.onCopy}>{t('copy_drawings')}</button>
+      <button type="button" disabled={!props.canPaste} onClick={props.onPaste}>{t('paste_drawings')}</button>
+      <span role="status">{props.selected.length} {t('objects_selected')}</span>
+    </div>
+    <Show when={props.selected.length > 0}>
+      <div class="object-toolbar" aria-label={t('selection_actions')}>
+        <For each={['delete', 'duplicate', 'show', 'hide', 'lock', 'unlock'] as const}>{action =>
+          <button type="button" onClick={() => props.onBulk(action)}>{t(`objects_${action}`)}</button>
+        }</For>
+        <button type="button" onClick={() => props.onReorder(1)}>{t('bring_forward')}</button>
+        <button type="button" onClick={() => props.onReorder(-1)}>{t('send_backward')}</button>
+        <input aria-label={t('drawing_group_name')} maxLength={80} placeholder={t('drawing_group_name')} value={groupName()} onInput={event => setGroupName(event.currentTarget.value)}/>
+        <button type="button" disabled={!groupName().trim()} onClick={() => { props.onGroup(groupName().trim()); setGroupName('') }}>{t('assign_group')}</button>
+        <button type="button" onClick={() => props.onGroup(undefined)}>{t('ungroup_drawings')}</button>
+      </div>
+    </Show>
+    <p class="layer-caption">{t('layer_order')}</p>
     <Show when={props.drawings.length > 0} fallback={<p>{t('drawing_objects_empty')}</p>}>
-      <ul><For each={props.drawings}>{drawing => <li>
-        <button type="button" class="drawing-name" onClick={() => props.onEdit(drawing)}>
-          {drawingLabel(drawing.name, props.locale)}
-          <Show when={typeof drawing.extendData?.text === 'string'}><small>{drawing.extendData.text}</small></Show>
-          <Show when={drawing.timeframes?.length}><small>{drawing.timeframes!.join(' ')}</small></Show>
-        </button>
-        <div class="object-actions">
-          <button type="button" aria-pressed={drawing.visible !== false} onClick={() => props.onToggle(drawing.id, 'visible')}>{t(drawing.visible === false ? 'show_drawing' : 'hide_drawing')}</button>
-          <button type="button" aria-pressed={!!drawing.lock} onClick={() => props.onToggle(drawing.id, 'lock')}>{t(drawing.lock ? 'unlock_drawing' : 'lock_drawing')}</button>
-          <button type="button" onClick={() => props.onDuplicate(drawing.id)}>{t('duplicate_drawing')}</button>
-          <button type="button" onClick={() => props.onRemove(drawing.id)}>{t('delete_drawing')}</button>
-        </div>
-      </li>}</For></ul>
+      <For each={drawingGroups(props.drawings)}>{group => <section role="group" aria-label={group.name || t('ungrouped_drawings')}>
+        <label class="object-group-heading"><input type="checkbox" aria-label={`${t('select_group')} ${group.name || t('ungrouped_drawings')}`}
+          checked={group.drawings.every(drawing => props.selected.includes(drawing.id))}
+          onChange={event => props.onSelectGroup(group.drawings.map(drawing => drawing.id), event.currentTarget.checked)}/>
+          <strong>{group.name || t('ungrouped_drawings')}</strong></label>
+        <ul><For each={group.drawings}>{drawing => <li classList={{ selected: props.selected.includes(drawing.id) }} data-drawing-id={drawing.id}>
+          <div class="object-row-heading">
+            <input type="checkbox" aria-label={`${t('select_drawing')} ${drawingLabel(drawing.name, props.locale)} ${drawing.id}`} checked={props.selected.includes(drawing.id)} onChange={() => props.onSelect(drawing.id, true)}/>
+            <button type="button" class="drawing-name" onClick={() => { props.onSelect(drawing.id, false); props.onEdit(drawing) }}>
+              {drawingLabel(drawing.name, props.locale)}
+              <small>{t('object_layer')} {props.drawings.findIndex(item => item.id === drawing.id) + 1}</small>
+              <Show when={typeof drawing.extendData?.text === 'string'}><small>{drawing.extendData.text}</small></Show>
+              <Show when={drawing.timeframes?.length}><small>{drawing.timeframes!.join(' ')}</small></Show>
+            </button>
+          </div>
+          <div class="object-actions">
+            <button type="button" aria-pressed={drawing.visible !== false} onClick={() => props.onToggle(drawing.id, 'visible')}>{t(drawing.visible === false ? 'show_drawing' : 'hide_drawing')}</button>
+            <button type="button" aria-pressed={!!drawing.lock} onClick={() => props.onToggle(drawing.id, 'lock')}>{t(drawing.lock ? 'unlock_drawing' : 'lock_drawing')}</button>
+            <button type="button" onClick={() => props.onDuplicate(drawing.id)}>{t('duplicate_drawing')}</button>
+            <button type="button" onClick={() => props.onRemove(drawing.id)}>{t('delete_drawing')}</button>
+          </div>
+        </li>}</For></ul>
+      </section>}</For>
     </Show>
   </aside>
 }

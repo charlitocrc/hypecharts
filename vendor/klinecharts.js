@@ -9063,8 +9063,8 @@ var OverlayView = /** @class */ (function (_super) {
         var _this = this;
         var _a, _b;
         if (overlay.needDefaultPointFigure) {
-            if ((((_a = hoverInstanceInfo.instance) === null || _a === void 0 ? void 0 : _a.id) === overlay.id && hoverInstanceInfo.figureType !== 0 /* EventOverlayInfoFigureType.None */) ||
-                (((_b = clickInstanceInfo.instance) === null || _b === void 0 ? void 0 : _b.id) === overlay.id && clickInstanceInfo.figureType !== 0 /* EventOverlayInfoFigureType.None */)) {
+            if (this.getWidget().getPane().getChart().getChartStore().getOverlayStore()._selectedIds?.has(overlay.id) || (((_a = hoverInstanceInfo.instance) === null || _a === void 0 ? void 0 : _a.id) === overlay.id && hoverInstanceInfo.figureType !== 0 /* EventOverlayInfoFigureType.None */) ||
+                (overlay.groupId !== this.getWidget().getPane().getChart().getChartStore().getOverlayStore()._selectionGroup && ((_b = clickInstanceInfo.instance) === null || _b === void 0 ? void 0 : _b.id) === overlay.id && clickInstanceInfo.figureType !== 0 /* EventOverlayInfoFigureType.None */)) {
                 var styles = overlay.styles;
                 var pointStyles_1 = __assign(__assign({}, defaultStyles.point), styles === null || styles === void 0 ? void 0 : styles.point);
                 coordinates.forEach(function (_a, index) {
@@ -11912,19 +11912,17 @@ var SyntheticEvent = /** @class */ (function () {
             return;
         }
         this._processEvent(compatEvent, this._handler.mouseUpEvent);
+        // Every completed click is delivered, including the second click of a
+        // double-click. Fast clicks on distinct objects must not disappear.
+        if (!this._cancelClick) this._processEvent(compatEvent, this._handler.mouseClickEvent);
         ++this._clickCount;
         if (this._clickTimeoutId !== null && this._clickCount > 1) {
             // check that both clicks are near enough
             var manhattanDistance = this._mouseTouchMoveWithDownInfo(this._getCoordinate(mouseUpEvent), this._clickCoordinate).manhattanDistance;
-            if (manhattanDistance < 5 /* ManhattanDistance.DoubleClick */ && !this._cancelClick) {
+            if (manhattanDistance < 5 /* ManhattanDistance.DoubleClick */ && !this._cancelClick && !compatEvent.ctrlKey && !compatEvent.metaKey && !compatEvent.shiftKey) {
                 this._processEvent(compatEvent, this._handler.mouseDoubleClickEvent);
             }
             this._resetClickTimeout();
-        }
-        else {
-            if (!this._cancelClick) {
-                this._processEvent(compatEvent, this._handler.mouseClickEvent);
-            }
         }
     };
     SyntheticEvent.prototype._clearLongTapTimeout = function () {
@@ -12173,6 +12171,10 @@ var SyntheticEvent = /** @class */ (function () {
             y: eventLike.clientY - box.top,
             pageX: eventLike.pageX,
             pageY: eventLike.pageY,
+            ctrlKey: event.ctrlKey === true,
+            metaKey: event.metaKey === true,
+            shiftKey: event.shiftKey === true,
+            altKey: event.altKey === true,
             isTouch: !event.type.startsWith('mouse') && event.type !== 'contextmenu' && event.type !== 'click',
             preventDefault: function () {
                 if (event.type !== 'touchstart') {
@@ -13489,6 +13491,27 @@ var ChartImp = /** @class */ (function () {
     ChartImp.prototype.getDataList = function () {
         return this._chartStore.getDataList();
     };
+    ChartImp.prototype.getViewport = function () {
+        var scale = this._chartStore.getTimeScaleStore();
+        return { barSpace: scale.getBarSpace().bar, offsetRightBarCount: scale.getOffsetRightBarCount() };
+    };
+    ChartImp.prototype.setViewport = function (barSpace, offsetRightBarCount) {
+        this._chartStore.getTimeScaleStore().setViewport(barSpace, offsetRightBarCount);
+    };
+    // Replace corrected history without clearing scales, overlays or pane state.
+    ChartImp.prototype.replaceData = function (dataList, more) {
+        var _this = this;
+        this._chartStore._dataList = dataList.slice();
+        var scale = this._chartStore.getTimeScaleStore();
+        if (more !== undefined) scale.setMore(more);
+        scale.setLoading(false);
+        scale.adjustVisibleRange();
+        this._chartStore.adjustVisibleDataList();
+        this._chartStore.getCrosshairStore().recalculate(true);
+        this._chartStore.getIndicatorStore().calcInstance().then(function () {
+            _this.adjustPaneViewport(false, true, true, true);
+        }).catch(function () {});
+    };
     ChartImp.prototype.applyNewData = function (dataList, more) {
         this._chartStore.clearDataList();
         this.applyMoreData(dataList, more);
@@ -13621,6 +13644,40 @@ var ChartImp = /** @class */ (function () {
             logWarn('createOverlay', 'options.id', 'duplicate id!!!');
         }
         return id;
+    };
+    ChartImp.prototype.getOverlayOrder = function (paneId, groupId) {
+        return this._chartStore.getOverlayStore().getInstances(paneId).filter(function (overlay) { return overlay.groupId === groupId; }).map(function (overlay) { return overlay.id; });
+    };
+    ChartImp.prototype.setOverlayOrder = function (paneId, groupId, ids) {
+        var instances = this._chartStore.getOverlayStore().getInstances(paneId);
+        var owned = instances.filter(function (overlay) { return overlay.groupId === groupId; });
+        if (!Array.isArray(ids) || ids.length !== owned.length || new Set(ids).size !== ids.length ||
+            ids.some(function (id) { return !owned.some(function (overlay) { return overlay.id === id; }); })) return false;
+        var byId = new Map(owned.map(function (overlay) { return [overlay.id, overlay]; }));
+        var position = 0;
+        // Host overlays retain both identity and their slots in the layer array.
+        for (var index = 0; index < instances.length; index++) {
+            if (instances[index].groupId === groupId) instances[index] = byId.get(ids[position++]);
+        }
+        this.updatePane(1 /* UpdateLevel.Overlay */, paneId);
+        return true;
+    };
+    ChartImp.prototype.getSelectedOverlayId = function () {
+        var instance = this._chartStore.getOverlayStore().getClickInstanceInfo().instance;
+        return instance ? instance.id : null;
+    };
+    ChartImp.prototype.selectOverlay = function (id) {
+        var store = this._chartStore.getOverlayStore();
+        var instance = id ? store.getInstanceById(id) : null;
+        var paneId = PaneIdConstants.CANDLE;
+        store._instances.forEach(function (instances, key) { if (instances.indexOf(instance) >= 0) paneId = key; });
+        store.setClickInstanceInfo({ paneId: paneId, instance: instance, figureType: instance ? 2 : 0, figureIndex: -1, attrsIndex: -1 }, {});
+    };
+    ChartImp.prototype.setOverlaySelection = function (ids, groupId) {
+        var store = this._chartStore.getOverlayStore();
+        store._selectionGroup = groupId;
+        store._selectedIds = new Set(ids.filter(function (id) { return store.getInstanceById(id) !== null; }));
+        this.updatePane(1 /* UpdateLevel.Overlay */);
     };
     ChartImp.prototype.getOverlayById = function (id) {
         return this._chartStore.getOverlayStore().getInstanceById(id);

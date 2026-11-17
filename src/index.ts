@@ -53,3 +53,7 @@ export type {
   SymbolSearchResult, SymbolResolveError, SymbolResolveErrorCode
 }
 export type { KLineData } from 'klinecharts'
+
+export { createWorkspaceStore, toChartWorkspace, toNamedWorkspace } from './workspace'
+export type { ChartWorkspaceState, NamedWorkspace } from './workspace'
+export type { ConnectionEvent } from './dataRecovery'

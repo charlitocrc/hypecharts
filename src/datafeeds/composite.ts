@@ -17,6 +17,7 @@ import type {
   SymbolInfo, SymbolSearchFilters, SymbolSearchResult
 } from '../types'
 import { parseSymbolName } from '../symbolSelect'
+import type { ConnectionEvent } from '../dataRecovery'
 
 export interface CompositeRoute {
   feed: Datafeed
@@ -40,6 +41,7 @@ export type CompositeDatafeed = Datafeed & {
  */
 export function createCompositeDatafeed (routes: CompositeRoute[] = []): CompositeDatafeed {
   let routeList = routes.slice()
+  const connections = new Map<(event: ConnectionEvent) => void, Array<() => void>>()
 
   const feedFor = (symbol: SymbolInfo): Datafeed | null => {
     const exchange = symbol.exchange?.toUpperCase()
@@ -61,9 +63,17 @@ export function createCompositeDatafeed (routes: CompositeRoute[] = []): Composi
   return {
     addRoute (route: CompositeRoute): void {
       routeList.push(route)
+      connections.forEach((stops, listener) => { stops.push(route.feed.subscribeConnection?.(listener) ?? (() => {})) })
     },
 
+    subscribeConnection (listener) {
+      const stops = routeList.map(route => route.feed.subscribeConnection?.(listener) ?? (() => {}))
+      connections.set(listener, stops)
+      return () => { stops.forEach(stop => stop()); connections.delete(listener) }
+    },
     destroy (): void {
+      connections.forEach(stops => stops.forEach(stop => stop()))
+      connections.clear()
       routeList.forEach(route => {
         const feed = route.feed as Datafeed & { destroy?: () => void }
         feed.destroy?.()

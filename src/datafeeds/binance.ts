@@ -1,3 +1,4 @@
+import { ConnectionEvents } from '../dataRecovery'
 /**
  * Binance datafeed — public market data, no API key.
  *
@@ -169,6 +170,10 @@ export function parseExchangeInfo (info: unknown, market: BinanceMarket): Binanc
 }
 
 export class BinanceDatafeed implements Datafeed {
+  private connections = new ConnectionEvents()
+  subscribeConnection = this.connections.subscribe
+  private reconnecting = new Set<string>()
+  private subscriptionSymbols = new Map<string, SymbolInfo>()
   private sockets = new Map<string, WebSocket>()
   private retries = new Map<string, ReturnType<typeof setTimeout>>()
   private subs = new Map<string, Set<DatafeedSubscribeCallback>>()
@@ -318,6 +323,7 @@ export class BinanceDatafeed implements Datafeed {
       listeners.add(callback)
       return
     }
+    this.subscriptionSymbols.set(key, { ...symbol })
     this.subs.set(key, new Set([callback]))
     this.connect(key)
   }
@@ -327,6 +333,8 @@ export class BinanceDatafeed implements Datafeed {
     const listeners = this.subs.get(key)
     if (listeners?.delete(callback) !== true || listeners.size > 0) return
     this.subs.delete(key)
+    this.subscriptionSymbols.delete(key)
+    this.reconnecting.delete(key)
     this.builders.delete(key)
     const retry = this.retries.get(key)
     if (retry) clearTimeout(retry)
@@ -341,6 +349,9 @@ export class BinanceDatafeed implements Datafeed {
 
   destroy (): void {
     this.destroyed = true
+    this.connections.clear()
+    this.subscriptionSymbols.clear()
+    this.reconnecting.clear()
     this.retries.forEach(timer => clearTimeout(timer))
     this.retries.clear()
     this.subs.clear()
@@ -361,7 +372,13 @@ export class BinanceDatafeed implements Datafeed {
       this.builders.set(key, new TradeBarBuilder())
     }
 
+    ws.onopen = () => {
+      if (this.sockets.get(key) !== ws || this.destroyed) return
+      const wasReconnect = this.reconnecting.delete(key)
+      this.connections.emit({ status: wasReconnect ? 'reconnected' : 'connected', symbol: this.subscriptionSymbols.get(key) })
+    }
     ws.onmessage = event => {
+      if (this.sockets.get(key) !== ws || this.destroyed) return
       let msg: Record<string, unknown>
       try { msg = JSON.parse(event.data) } catch { return }
       if (msg?.e === 'trade' || msg?.e === 'aggTrade') {
@@ -388,8 +405,11 @@ export class BinanceDatafeed implements Datafeed {
     }
 
     ws.onclose = () => {
+      if (this.sockets.get(key) !== ws) return
       this.sockets.delete(key)
       if (this.destroyed || !this.subs.has(key)) return
+      this.reconnecting.add(key)
+      this.connections.emit({ status: 'disconnected', symbol: this.subscriptionSymbols.get(key) })
       this.retries.set(key, setTimeout(() => this.connect(key), 2000))
     }
   }

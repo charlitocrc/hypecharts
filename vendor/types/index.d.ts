@@ -875,6 +875,14 @@ export interface ConvertFinder {
 	absolute?: boolean;
 }
 export interface Chart {
+	getOverlayOrder: (paneId: string, groupId: string) => string[];
+	setOverlayOrder: (paneId: string, groupId: string, ids: string[]) => boolean;
+	getSelectedOverlayId: () => string | null;
+	selectOverlay: (id: string | null) => void;
+	setOverlaySelection: (ids: string[], groupId?: string) => void;
+	getViewport: () => { barSpace: number; offsetRightBarCount: number };
+	setViewport: (barSpace: number, offsetRightBarCount: number) => void;
+	replaceData: (dataList: KLineData[], more?: boolean) => void;
 	getPaneOrder: () => string[];
 	setIndicatorOrder: (paneId: string, names: string[]) => boolean;
 	setPaneOrder: (paneIds: string[]) => boolean;

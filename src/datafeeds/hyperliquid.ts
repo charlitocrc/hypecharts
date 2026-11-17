@@ -1,3 +1,4 @@
+import { ConnectionEvents } from '../dataRecovery'
 /**
  * Hyperliquid datafeed — public REST + WebSocket market data, no API key.
  *
@@ -148,6 +149,9 @@ function subKey (symbol: SymbolInfo, period: Period): string {
 }
 
 export class HyperliquidDatafeed implements Datafeed {
+  private connections = new ConnectionEvents()
+  subscribeConnection = this.connections.subscribe
+  private opened = false
   private ws: WebSocket | null = null
   private subs = new Map<string, Set<DatafeedSubscribeCallback>>()
   private builders = new Map<string, TradeBarBuilder>()
@@ -329,6 +333,7 @@ export class HyperliquidDatafeed implements Datafeed {
 
   destroy (): void {
     this.destroyed = true
+    this.connections.clear()
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     if (this.pingTimer) clearInterval(this.pingTimer)
     this.subs.clear()
@@ -343,14 +348,19 @@ export class HyperliquidDatafeed implements Datafeed {
     this.ws = ws
 
     ws.onopen = () => {
+      if (this.ws !== ws || this.destroyed) return
+      const status = this.opened ? 'reconnected' : 'connected'
+      this.opened = true
       this.startPing()
       this.subs.forEach((_listeners, key) => {
         const [coin, interval] = key.split('|')
         ws.send(JSON.stringify({ method: 'subscribe', subscription: hlSubscription(coin, interval) }))
       })
+      this.connections.emit({ status, exchange: HL_EXCHANGE })
     }
 
     ws.onmessage = event => {
+      if (this.ws !== ws || this.destroyed) return
       let msg: { channel?: string; data?: unknown }
       try { msg = JSON.parse(event.data) } catch { return }
       if (msg?.channel === 'trades' && Array.isArray(msg.data)) {
@@ -381,7 +391,9 @@ export class HyperliquidDatafeed implements Datafeed {
     }
 
     ws.onclose = () => {
+      if (this.ws !== ws) return
       this.stopPing()
+      this.connections.emit({ status: 'disconnected', exchange: HL_EXCHANGE })
       if (this.destroyed || this.subs.size === 0) return
       this.reconnectTimer = setTimeout(() => this.connect(), 2000)
     }
@@ -400,6 +412,7 @@ export class HyperliquidDatafeed implements Datafeed {
   }
 
   private closeWs (): void {
+    this.opened = false
     this.stopPing()
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null

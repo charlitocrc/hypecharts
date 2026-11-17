@@ -12,7 +12,7 @@
  * limitations under the License.
  */
 
-import { createSignal, createEffect, createMemo, onMount, Show, onCleanup, startTransition, untrack, Component } from 'solid-js'
+import { createSignal, createEffect, createMemo, onMount, Show, onCleanup, startTransition, untrack, Component, batch } from 'solid-js'
 
 import {
   init, dispose, utils, Nullable, Chart, OverlayMode, OverlayCreate, Styles,
@@ -68,6 +68,13 @@ import { ProfileHistory, profileDetailPeriod, profileSource, type ProfileSource 
 import { UTC_DAY } from './volumeProfile'
 import { mapHtfBuckets } from './indicator/timeframe'
 import { HistoryPager, normalizeHistory, validHistoryCandle } from './historyPaging'
+import { fetchRecovery, mergeRecovered } from './dataRecovery'
+import { captureTimeViewport, restoreTimeViewport } from './timeViewport'
+import { toChartWorkspace } from './workspace'
+import type { ChartWorkspaceState } from './workspace'
+import WorkspaceModal from './widget/workspace-modal'
+import { drawingClipboard, pasteDrawings, reorderDrawings } from './drawingObjects'
+import { chartTimeAtIndex } from './multiChartTime'
 import { compareTooltipValues } from './indicator/compare'
 import type { CompareMode } from './compare'
 import { alignSeries, fillLeadingGaps, nextCompareColor, normalizeCompareValues } from './compare'
@@ -158,6 +165,9 @@ function createIndicator (
 }
 
 const ChartProComponent: Component<ChartProComponentProps> = props => {
+  const [workspaceRestoring, setWorkspaceRestoring] = createSignal(false)
+  const [workspaceModalVisible, setWorkspaceModalVisible] = createSignal(false)
+  let pendingWorkspace: { state: ChartWorkspaceState, resolve: () => void, reject: (error: Error) => void } | null = null
   let unbindIndicatorDrag: (() => void) | undefined
   let widgetRef: HTMLDivElement | undefined = undefined
   let widget: Nullable<Chart> = null
@@ -215,6 +225,10 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   }
 
   const historyPager = new HistoryPager()
+  const [historyPagingError, setHistoryPagingError] = createSignal(false)
+  const [recoveryError, setRecoveryError] = createSignal(false)
+  let recovering: { request: number, live: Set<number> } | null = null
+  let releaseConnection: (() => void) | undefined
   let reqId = 0
   let disposed = false
   let unbindShortcuts: Nullable<() => void> = null
@@ -1138,6 +1152,10 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   const [drawingManagerVisible, setDrawingManagerVisible] = createSignal(false)
   const [drawingEditor, setDrawingEditor] = createSignal<DrawingItem | null>(null)
   const [drawingItems, setDrawingItems] = createSignal<DrawingItem[]>([])
+  const [selectedDrawingIds, setSelectedDrawingIds] = createSignal<string[]>([])
+  const [clipboardAvailable, setClipboardAvailable] = createSignal(false)
+  let releaseClipboard: (() => void) | undefined
+  let syncingObjectSelection = false
   const [historyState, setHistoryState] = createSignal({ canUndo: false, canRedo: false, undoLabel: '', redoLabel: '' })
   const drawingHistory = new DrawingHistory<ChartSnapshot>()
   drawingHistory.reset({ drawings: [], indicators: { main: [], sub: [] }, chartType: initialCandleType, settings: { styles: storedStyles(), timezone: timezone().key } })
@@ -1148,7 +1166,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   const modalVisible = () => (
     indicatorModalVisible() || timezoneModalVisible() || goToDateVisible() || intervalBuilderVisible() || settingModalVisible() ||
     screenshotUrl().length > 0 || indicatorSettingModalParams().visible || textEditor() !== null || drawingEditor() !== null ||
-    symbolSearchVisible()
+    symbolSearchVisible() || workspaceModalVisible()
   )
 
   const applyCursorMode = (mode: CursorMode) => {
@@ -1286,6 +1304,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   }
 
   const applyRealtimeBar = (data: KLineData) => {
+    recovering?.live.add(data.timestamp)
     // A 1s series can start with an empty history page (thin trade seed); the
     // first live bar means the chart is alive, so clear empty/error states.
     if (dataState() !== 'ok') setDataState('ok')
@@ -1370,7 +1389,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     resolvedSymbol: () => symbol(),
     setPeriod: changePeriod,
     getPeriod: () => period(),
-    getChart: () => widget
+    getChart: () => widget,
+    getWorkspace: () => captureWorkspace(),
+    applyWorkspace: state => applyWorkspace(state)
   })
 
   const syncChartActionsWidth = () => {
@@ -1464,6 +1485,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   // Ids of every overlay this component created. createOverlay returns the id
   // synchronously, so membership never depends on a callback firing.
   const drawingIds = new Set<string>()
+  const drawingObjectGroups = new Map<string, string>()
   const dataDrawingIds = new Set<string>()
   let restoredTicker: Nullable<string> = null
   let restoring = false
@@ -1506,10 +1528,11 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
 
   const snapshotDrawings = (): DrawingItem[] => {
     const out: DrawingItem[] = []
-    drawingIds.forEach(id => {
+    ;(widget?.getOverlayOrder('candle_pane', DRAWING_GROUP_ID) ?? []).forEach(id => {
+      if (!drawingIds.has(id)) return
       const overlay = widget?.getOverlayById(id)
       if (!overlay || overlay.currentStep !== -1 || (textEditor()?.isNew && textEditor()?.id === id)) return
-      const stored = toStoredDrawing(overlay, DRAWING_GROUP_ID)
+      const stored = toStoredDrawing({ ...overlay, objectGroup: drawingObjectGroups.get(id) }, DRAWING_GROUP_ID)
       if (stored) out.push({ ...stored, id })
     })
     return lodashClone(out)
@@ -1558,6 +1581,69 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     if (overlay?.groupId === DRAWING_GROUP_ID) widget?.overrideOverlay({ id, [field]: !overlay[field] })
   }, historyLabel('history_edit_drawing'))
 
+  const selectedOwnedDrawings = (): DrawingItem[] => snapshotDrawings().filter(item => selectedDrawingIds().includes(item.id))
+  const selectObjects = (ids: string[]): void => {
+    const valid = snapshotDrawings().filter(item => ids.includes(item.id)).map(item => item.id)
+    setSelectedDrawingIds(valid)
+    selectedOverlayId = valid[valid.length - 1] ?? null
+    syncingObjectSelection = true
+    try { widget?.selectOverlay(selectedOverlayId); widget?.setOverlaySelection(valid, DRAWING_GROUP_ID) } finally { syncingObjectSelection = false }
+  }
+  const selectObject = (id: string, additive: boolean): void => {
+    selectObjects(additive ? selectedDrawingIds().includes(id) ? selectedDrawingIds().filter(item => item !== id) : [...selectedDrawingIds(), id] : [id])
+  }
+  const assignObjectGroup = (name: string | undefined): void => mutateDrawings(() => {
+    selectedOwnedDrawings().forEach(item => { if (name?.trim()) drawingObjectGroups.set(item.id, name.trim().slice(0, 80)); else drawingObjectGroups.delete(item.id) })
+  }, historyLabel('history_group_drawings'))
+  const bulkObjects = (action: 'delete' | 'duplicate' | 'show' | 'hide' | 'lock' | 'unlock'): void => {
+    const selected = selectedOwnedDrawings()
+    if (!selected.length) return
+    mutateDrawings(() => {
+      const duplicates: string[] = []
+      selected.forEach(item => {
+        if (action === 'delete') widget?.removeOverlay(item.id)
+        else if (action === 'duplicate') {
+          const { id, ...copy } = item
+          const created = createDrawing({ ...copy, visible: true, lock: false } as OverlayCreate)
+          if (created) duplicates.push(created)
+        } else widget?.overrideOverlay({ id: item.id, ...(action === 'lock' || action === 'unlock' ? { lock: action === 'lock' } : { visible: action === 'show' }) })
+      })
+      if (action === 'delete') selectObjects([])
+      if (action === 'duplicate') { pendingOverlayId = null; setActiveTool(''); selectObjects(duplicates) }
+    }, historyLabel(`history_objects_${action}`))
+  }
+  const reorderObjects = (direction: -1 | 1): void => mutateDrawings(() => {
+    const next = reorderDrawings(snapshotDrawings(), new Set(selectedDrawingIds()), direction)
+    widget?.setOverlayOrder('candle_pane', DRAWING_GROUP_ID, next.map(item => item.id))
+  }, historyLabel('history_order_drawings'))
+  const copyObjects = (): boolean => {
+    const items = selectedOwnedDrawings()
+    if (!items.length || !widget) return false
+    const data = widget.getDataList()
+    drawingClipboard.copy(items.map(({ id, ...item }) => ({ ...item, points: item.points.map(point => {
+      if (point.timestamp !== undefined || point.dataIndex === undefined) return point
+      const timestamp = chartTimeAtIndex(data, point.dataIndex, untrack(period))
+      return timestamp !== undefined ? { timestamp, ...(point.value !== undefined ? { value: point.value } : {}) } : point
+    }) })))
+    return true
+  }
+  const pasteObjects = (): boolean => {
+    if (!widget || loadingVisible() || !clipboardAvailable() || !rawData.length) return false
+    const data = widget.getDataList(), range = widget.getVisibleRange()
+    const index = Math.max(0, Math.min(data.length - 1, Math.round((range.from + range.to) / 2)))
+    const anchor = data[index]
+    if (!anchor) return false
+    mutateDrawings(() => {
+      const created: string[] = []
+      pasteDrawings(drawingClipboard.read(), { timestamp: anchor.timestamp, value: anchor.close }).forEach(item => {
+        const id = createDrawing(item as OverlayCreate)
+        if (id) created.push(id)
+      })
+      pendingOverlayId = null; setActiveTool(''); selectObjects(created)
+    }, historyLabel('history_paste_drawings'))
+    return true
+  }
+
   const duplicateDrawing = (id: string) => mutateDrawings(() => {
     const original = snapshotDrawings().find(drawing => drawing.id === id)
     if (!original) return
@@ -1603,6 +1689,73 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   const historyTitle = (key: string, label: string): string =>
     i18n(key, props.locale).replace('{action}', label ? `${label} ` : '')
 
+  const captureWorkspace = (): ChartWorkspaceState => {
+    if (!widget || loadingVisible() || workspaceRestoring() || dataState() === 'error') throw new Error('Wait for the chart to load')
+    return JSON.parse(JSON.stringify({ version: 1, symbol: untrack(symbol), period: untrack(period),
+      indicators: indicatorLayout(true), drawings: snapshotDrawings().map(({ id, ...drawing }) => drawing),
+      settings: { styles: storedStyles(), timezone: timezone().key, chartType: candleType(),
+        drawingBarVisible: drawingBarVisible(), cursorMode: cursorMode(), barCountdown: barCountdownVisible(), performanceMode: performanceMode(), customIntervals: customPeriods().map(period => period.text) },
+      historyStart: rawData[0]?.timestamp, appearance: widget.getStyles(), viewport: isBrickType(candleType()) ? undefined : captureTimeViewport(widget, period()), theme: theme(), locale: locale()
+    }))
+  }
+
+  const applyWorkspace = (value: ChartWorkspaceState): Promise<void> => {
+    const state = toChartWorkspace(value)
+    if (!state || disposed) return Promise.reject(new Error('Invalid workspace or disposed chart'))
+    pendingWorkspace?.reject(new Error('Workspace load superseded'))
+    return new Promise((resolve, reject) => {
+      pendingWorkspace = { state, resolve, reject }
+      setWorkspaceRestoring(true)
+      batch(() => {
+        const intervals = (state.settings.customIntervals ?? []).map(text => parsePeriodText(text)).filter((p): p is Period => p !== null)
+        intervals.forEach(p => { (props.datafeed as Partial<AggregatingDatafeed>).declareInterval?.(p) })
+        setCustomPeriods(intervals)
+        applySymbol(state.symbol)
+        changePeriod(state.period)
+        setRetryTick(tick => tick + 1)
+      })
+    })
+  }
+
+  const finishWorkspace = async (): Promise<void> => {
+    const job = pendingWorkspace
+    if (!job || !widget) return
+    const request = reqId
+    const current = (): boolean => !disposed && pendingWorkspace === job && request === reqId
+    try {
+      const state = job.state
+      batch(() => {
+        setTheme(state.theme); setLocale(state.locale)
+        setStyles(state.appearance ?? props.styles)
+        setStoredStyles(state.settings.styles ?? null)
+        setTimezone({ key: state.settings.timezone ?? 'UTC', text: state.settings.timezone ?? 'UTC' })
+        setDrawingBarVisible(state.settings.drawingBarVisible !== false)
+        setCursorMode(state.settings.cursorMode === 'arrow' ? 'arrow' : 'crosshair')
+        setBarCountdownVisible(state.settings.barCountdown === true)
+        setPerformanceMode(state.settings.performanceMode === true)
+      })
+      changeCandleType((state.settings.chartType ?? CandleType.CandleSolid) as ChartType, false)
+      applyIndicatorLayout(state.indicators)
+      replaceDrawings(state.drawings)
+      if (state.viewport && !isBrickType(untrack(candleType))) {
+        for (let page = 0; current() && rawData.length && rawData[0].timestamp > Math.max(state.viewport.from, state.historyStart ?? -Infinity) && page < 100; page++) {
+          if (!await loadOlderPage()) break
+        }
+        if (!current()) return
+        restoreTimeViewport(widget, untrack(period), state.viewport)
+      }
+      if (!current()) return
+      persistIndicators(); persistDrawings()
+      drawingHistory.reset(snapshotChart()); updateHistoryState()
+      pendingWorkspace = null
+      setWorkspaceRestoring(false)
+      job.resolve()
+    } catch (error) {
+      if (pendingWorkspace === job) { pendingWorkspace = null; setWorkspaceRestoring(false) }
+      job.reject(error instanceof Error ? error : new Error(String(error)))
+    }
+  }
+
   const persistChartState = () => {
     persistDrawings()
     persistIndicators()
@@ -1634,23 +1787,35 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         selectedOverlayId = null
       }
       dataDrawingIds.delete(event.overlay.id)
+      drawingObjectGroups.delete(event.overlay.id)
+      setSelectedDrawingIds(ids => ids.filter(id => id !== event.overlay.id))
       if (drawingIds.delete(event.overlay.id)) {
         persistDrawings()
       }
       return false
     },
     onSelected: (event: { overlay: Overlay }) => {
-      selectedOverlayId = event.overlay.id
+      if (syncingObjectSelection) return false
+      selectedOverlayId = selectedDrawingIds().includes(event.overlay.id) ? event.overlay.id : selectedDrawingIds().at(-1) ?? null
       return false
     },
     onDeselected: (event: { overlay: Overlay }) => {
+      if (syncingObjectSelection) return false
+      const current = widget?.getSelectedOverlayId()
+      if (!current || !drawingIds.has(current)) { setSelectedDrawingIds([]); widget?.setOverlaySelection([], DRAWING_GROUP_ID) }
       if (selectedOverlayId === event.overlay.id) {
         selectedOverlayId = null
       }
       return false
     },
-    onClick: (event: { overlay: Overlay }) => {
+    onClick: (event: { overlay: Overlay, ctrlKey?: boolean, metaKey?: boolean, shiftKey?: boolean }) => {
+      if (syncingObjectSelection) return false
       const { id, name } = event.overlay
+      const additive = event.ctrlKey || event.metaKey || event.shiftKey
+      const ids = additive ? selectedDrawingIds().includes(id) ? selectedDrawingIds().filter(item => item !== id) : [...selectedDrawingIds(), id] : [id]
+      setSelectedDrawingIds(ids)
+      selectedOverlayId = ids.at(-1) ?? null
+      widget?.setOverlaySelection(ids, DRAWING_GROUP_ID)
       if (TEXT_TOOLS.has(name)) {
         const now = Date.now()
         if (lastDrawingClick.id === id && now - lastDrawingClick.at < 400) {
@@ -1788,6 +1953,8 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     pendingOverlayId = id ?? null
     if (id && overlay.name !== 'measure') {
       drawingIds.add(id)
+      const group = (overlay as OverlayCreate & StoredDrawing).objectGroup
+      if (typeof group === 'string' && group.trim()) drawingObjectGroups.set(id, group.trim().slice(0, 80))
       if (DATA_DRAWING_TOOLS.has(overlay.name)) {
         dataDrawingIds.add(id)
       }
@@ -1796,7 +1963,8 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       lastDrawing = overlay
       setActiveTool(overlay.name)
     }
-    return pendingOverlayId
+    if (id && widget?.getOverlayById(id)?.currentStep === -1) { pendingOverlayId = null; setActiveTool('') }
+    return id ?? null
   }
 
   // klinecharts builds drawings click by click, so freehand strokes are
@@ -1928,6 +2096,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     try {
       widget?.removeOverlay({ groupId: DRAWING_GROUP_ID })
       drawingIds.clear()
+      drawingObjectGroups.clear()
+      setSelectedDrawingIds([])
+      widget?.setOverlaySelection([], DRAWING_GROUP_ID)
       dataDrawingIds.clear()
       drawings.forEach(item => { createDrawing(item as OverlayCreate) })
       refreshDataDrawings()
@@ -1962,6 +2133,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
   }
 
   const removeSelectedDrawing = () => {
+    if (selectedDrawingIds().length) { bulkObjects('delete'); return }
     if (!selectedOverlayId) {
       return
     }
@@ -2096,15 +2268,42 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       page => {
         if (!current() || isBrickType(untrack(candleType))) return false
         const older = normalizeHistory(page, from, Math.min(to, before - 1))
+        setHistoryPagingError(false)
         rawData = older.concat(rawData)
-        chart.applyMoreData(untrack(candleType) === 'heikin_ashi' ? heikinAshi(older) : older, older.length > 0)
+        if (untrack(candleType) === 'heikin_ashi' && older.length) chart.replaceData(heikinAshi(rawData), true)
+        else chart.applyMoreData(older, older.length > 0)
         refreshDataDrawings()
         void refreshHtfIndicators()
         void refreshCompares()
         return older.length > 0
       },
-      () => { if (current()) chart.applyMoreData([], false) }
+      () => { if (current()) { chart.applyMoreData([], false); setHistoryPagingError(true) } },
+      { attempts: 3, delayMs: 250 }
     )
+  }
+
+  const recoverData = async (): Promise<void> => {
+    if (disposed || loadingVisible() || !widget || !rawData.length || recovering || isBrickType(untrack(candleType))) return
+    const chart = widget, s = untrack(symbol), p = untrack(period)
+    const job = { request: reqId, live: new Set<number>() }
+    recovering = job
+    setRecoveryError(false)
+    const current = (): boolean => !disposed && widget === chart && reqId === job.request && recovering === job
+    try {
+      const from = Math.max(rawData[0].timestamp, rawData[rawData.length - 1].timestamp - periodDurationMs(p))
+      const repaired = await fetchRecovery(props.datafeed, s, p, from, Date.now(), current)
+      if (!current()) return
+      const viewport = captureTimeViewport(chart, p)
+      resetRealtimeQueue()
+      rawData = mergeRecovered(rawData, repaired, job.live)
+      resetStudyData()
+      chart.replaceData(transformBars(untrack(candleType), rawData, boxSize))
+      if (!followLive) restoreTimeViewport(chart, p, viewport)
+      refreshDataDrawings()
+      void refreshHtfIndicators(); void refreshCompares()
+    } catch {
+      if (current()) setRecoveryError(true)
+    } finally { if (recovering === job) recovering = null }
   }
 
   let goingToHistory: object | null = null
@@ -2353,10 +2552,13 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
           return true
         }
         if (closeModals()) return true
+        if (workspaceModalVisible() && !pendingWorkspace) { setWorkspaceModalVisible(false); return true }
         if (drawingManagerVisible()) { setDrawingManagerVisible(false); return true }
         return false
       },
       onDelete: removeSelectedDrawing,
+      onCopy: copyObjects,
+      onPaste: pasteObjects,
       onUndo: () => travelHistory('undo'),
       onRedo: () => travelHistory('redo'),
       onDraw: name => {
@@ -2383,6 +2585,10 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     indicatorsReady = true
     const barSpace = read<{ barSpace?: unknown }>(VIEWPORT_KEY)?.barSpace
     if (typeof barSpace === 'number' && barSpace >= 1 && barSpace <= 50) widget?.setBarSpace(barSpace)
+    releaseClipboard = drawingClipboard.subscribe(setClipboardAvailable)
+    releaseConnection = props.datafeed.subscribeConnection?.(event => {
+      if (event.status === 'reconnected' && (!event.exchange || event.exchange.toUpperCase() === untrack(symbol).exchange?.toUpperCase()) && (!event.symbol || symbolKey(event.symbol) === symbolKey(untrack(symbol)))) void recoverData()
+    })
     widget?.loadMore(() => { void loadOlderPage() })
     widget?.subscribeAction(ActionType.OnTooltipIconClick, (data) => {
       if (data.indicatorName) {
@@ -2431,6 +2637,12 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       clearInterval(countdownTimer)
       countdownTimer = null
     }
+    pendingWorkspace?.reject(new Error('Chart disposed'))
+    pendingWorkspace = null
+    releaseClipboard?.()
+    releaseConnection?.()
+    historyPager.reset()
+    recovering = null
     resetRealtimeQueue()
     profileEpoch++
     profileHistory.reset()
@@ -2472,6 +2684,9 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     reqId++
     resetStudyData()
     historyPager.reset()
+    setHistoryPagingError(false)
+    setRecoveryError(false)
+    recovering = null
     goingToHistory = null
     releaseMainSubscription()
     ;[...htfSubs.values(), ...compareSubs.values()].forEach(sub => {
@@ -2585,9 +2800,17 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       persistDrawings()
     }
     retryTick()
+    if (pendingWorkspace && (symbolKey(pendingWorkspace.state.symbol) !== symbolKey(s) || pendingWorkspace.state.period.text !== p.text)) {
+      pendingWorkspace.reject(new Error('Workspace load interrupted by selection change'))
+      pendingWorkspace = null
+      setWorkspaceRestoring(false)
+    }
     const id = ++reqId
     resetStudyData()
     historyPager.reset()
+    setHistoryPagingError(false)
+    setRecoveryError(false)
+    recovering = null
     goingToHistory = null
     profileEpoch++
     profileHistory.reset()
@@ -2636,6 +2859,10 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
       // marked loading. Re-arm core paging once this dataset is actually ready.
       if (dataState() !== 'error') widget?.applyMoreData([], rawData.length > 0 && !isBrickType(untrack(candleType)))
       syncChartActionsWidth()
+      if (pendingWorkspace) {
+        if (dataState() === 'error') { pendingWorkspace.reject(new Error('Workspace market data could not load')); pendingWorkspace = null; setWorkspaceRestoring(false) }
+        else await finishWorkspace()
+      }
     }
     get()
     return { symbol: s, period: p }
@@ -2643,15 +2870,15 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
 
   let selectionNotificationQueued = false
   createEffect(() => {
-    void [symbol(), period(), loadingVisible(), dataState(), candleType()]
+    void [symbol(), period(), loadingVisible(), workspaceRestoring(), dataState(), candleType()]
     if (selectionNotificationQueued) return
     selectionNotificationQueued = true
     queueMicrotask(() => {
       selectionNotificationQueued = false
       if (disposed) return
       untrack(() => props.onSelectionChange?.({
-        symbol: symbol(), period: period(), loading: loadingVisible(),
-        dataReady: !loadingVisible() && dataState() === 'ok' && (widget?.getDataList().length ?? 0) > 0,
+        symbol: symbol(), period: period(), loading: loadingVisible() || workspaceRestoring(),
+        dataReady: !loadingVisible() && !workspaceRestoring() && dataState() === 'ok' && (widget?.getDataList().length ?? 0) > 0,
         timeBased: !isBrickType(candleType())
       }))
     })
@@ -2659,6 +2886,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
 
   createEffect(() => {
     const t = theme()
+    widgetRef?.closest('.klinecharts-pro')?.setAttribute('data-theme', t)
     widget?.setStyles(t)
     const color = t === 'dark' ? '#929AA5' : '#76808F'
     widget?.setStyles({
@@ -3009,13 +3237,23 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
         redoTitle={historyTitle('redo_action', historyState().redoLabel)}
         onUndo={() => travelHistory('undo')}
         onRedo={() => travelHistory('redo')}
+        onWorkspaces={() => { setWorkspaceModalVisible(true) }}
         onObjects={() => { cancelDrawing(); setDrawingManagerVisible(value => !value) }}
         objectsVisible={drawingManagerVisible()}
       />
       <div
         class="klinecharts-pro-content">
+        <Show when={workspaceModalVisible()}>
+          <WorkspaceModal locale={props.locale} capture={() => [captureWorkspace()]} load={async workspace => {
+            if (workspace.charts.length !== 1) throw new Error('Open multi-chart workspaces in the host workspace manager')
+            await applyWorkspace(workspace.charts[0])
+          }} onClose={() => setWorkspaceModalVisible(false)}/>
+        </Show>
         <Show when={drawingManagerVisible() && !loadingVisible()}>
           <DrawingManager locale={props.locale} drawings={drawingItems()}
+            selected={selectedDrawingIds()} canPaste={clipboardAvailable()} onSelect={selectObject}
+            onSelectGroup={(ids, checked) => selectObjects(checked ? [...new Set([...selectedDrawingIds(), ...ids])] : selectedDrawingIds().filter(id => !ids.includes(id)))}
+            onGroup={assignObjectGroup} onBulk={bulkObjects} onReorder={reorderObjects} onCopy={copyObjects} onPaste={pasteObjects}
             onEdit={setDrawingEditor} onToggle={toggleDrawing} onDuplicate={duplicateDrawing}
             onRemove={removeDrawing} onClose={() => setDrawingManagerVisible(false)}/>
         </Show>
@@ -3071,6 +3309,13 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
           tabIndex={0}
           onPointerDown={() => widgetRef?.focus({ preventScroll: true })}
           data-drawing-bar-visible={drawingBarVisible()}/>
+        <Show when={historyPagingError() || recoveryError()}>
+          <div class="klinecharts-pro-data-retry" role="status">
+            <span>{i18n(historyPagingError() ? 'history_page_error' : 'recovery_error', props.locale)}</span>
+            <button type="button" onClick={() => { if (historyPagingError()) { setHistoryPagingError(false); void loadOlderPage() } else void recoverData() }}>{i18n('retry', props.locale)}</button>
+            <Show when={recoveryError()}><button type="button" onClick={() => setRetryTick(tick => tick + 1)}>{i18n('reload_candles', props.locale)}</button></Show>
+          </div>
+        </Show>
         <div
           ref={chartActionsRef}
           class="klinecharts-pro-chart-actions">
